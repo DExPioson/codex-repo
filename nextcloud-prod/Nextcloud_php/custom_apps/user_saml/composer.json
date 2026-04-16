@@ -1,0 +1,38 @@
+{
+	"name": "nextcloud/user_saml",
+	"config": {
+		"optimize-autoloader": true,
+		"classmap-authoritative": true,
+		"platform": {
+			"php": "8.0"
+		},
+		"allow-plugins": {
+			"cweagans/composer-patches": true
+		}
+	},
+	"extra": {
+		"patches": {
+			"onelogin/php-saml": {
+				"PHP 8.4 compatibility": "https://patch-diff.githubusercontent.com/raw/SAML-Toolkits/php-saml/pull/600.patch"
+			}
+		}
+	},
+	"scripts": {
+		"cs:fix": "php-cs-fixer fix",
+		"cs:check": "php-cs-fixer fix --dry-run --diff",
+		"psalm": "psalm.phar",
+		"lint": "find . -name \\*.php -not -path '*/vendor/*' -print0 | xargs -0 -n1 php -l",
+		"test:unit": "phpunit -c tests/unit/phpunit.xml"
+	},
+	"require-dev": {
+		"nextcloud/coding-standard": "^1.1",
+		"phpunit/phpunit": "^9",
+		"psalm/phar": "^5.13",
+		"nextcloud/ocp": "dev-stable27"
+	},
+	"require": {
+		"onelogin/php-saml": "^4.2",
+		"firebase/php-jwt": "^6.10",
+		"cweagans/composer-patches": "^1.7"
+	}
+}

@@ -1,0 +1,110 @@
+/*!
+ * SPDX-FileCopyrightText: 2019 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ */
+
+#app-settings {
+	.settings-fieldset-interior-item {
+		padding: 5px 0;
+
+		.action-checkbox {
+			line-height: unset !important;
+			white-space: unset !important;
+
+			&__label::before {
+				margin: 0 6px 3px 3px !important;
+				flex-shrink: 0;
+			}
+		}
+
+		.action-button {
+			min-height: unset !important;
+
+			&__icon {
+				margin: 0 6px 3px 3px !important;
+				height: 14px !important;
+				width: 14px !important;
+				background-position: unset !important;
+			}
+
+			&__longtext {
+				width: unset !important;
+				padding: 0 !important;
+			}
+		}
+
+		&--slotDuration,
+		&--defaultReminder {
+			display: table;
+
+			label {
+				display: block;
+			}
+
+			.multiselect {
+				display: block;
+			}
+		}
+
+		&--timezone,
+		&--default-calendar {
+			width: 100%;
+		
+			.multiselect {
+				width: 100%;
+			}
+		}
+	}
+}
+
+.shortcut-overview-modal {
+	.modal-container {
+		display: flex !important;
+		flex-wrap: wrap;
+		padding: 0 12px 12px 12px !important;
+
+		* {
+			box-sizing: border-box;
+		}
+
+		.shortcut-section {
+			width: 50%;
+			flex-grow: 0;
+			flex-shrink: 0;
+			padding: 10px;
+
+			.shortcut-section-item {
+				width: 100%;
+				display: grid;
+				grid-template-columns: 33% 67%;
+				column-gap: 10px;
+
+				&:not(:first-child) {
+					margin-top: 10px;
+				}
+
+				&__keys {
+					display: block;
+					text-align: right;
+				}
+
+				&__label {
+					display: block;
+					text-align: left;
+					padding-top: 5px;
+				}
+
+				&__spacer {
+					margin: 0 3px;
+				}
+			}
+		}
+	}
+}
+
+// Fix the shortcut overview on smaller screens
+@media screen and (max-width: 800px) {
+	.shortcut-overview-modal .modal-container .shortcut-section {
+		width: 100%;
+	}
+}

@@ -1,0 +1,6 @@
+NextCloud-Frontend/node_modules/
+NextCloud-Frontend/dist/
+NextCloud-Frontend/playwright/.auth/
+NextCloud-Frontend/.env
+nextcloud-prod/Nextcloud_php/data/
+nextcloud-prod/Nextcloud_php/.nextcloud.log
