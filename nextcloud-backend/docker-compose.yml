@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  db:
+    image: mariadb:10.11
+    restart: unless-stopped
+    networks:
+      - nextcloud_net
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: nextcloud
+      MYSQL_USER: nextcloud
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-nextcloudpassword}
+    volumes:
+      - db_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks:
+      - nextcloud_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  nextcloud:
+    image: nextcloud:28-apache
+    restart: unless-stopped
+    networks:
+      - nextcloud_net
+    ports:
+      - "8080:80"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost/status.php"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 90s
+    environment:
+      MYSQL_HOST: db
+      MYSQL_DATABASE: nextcloud
+      MYSQL_USER: nextcloud
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-nextcloudpassword}
+      REDIS_HOST: redis
+      REDIS_HOST_PORT: 6379
+      NEXTCLOUD_ADMIN_USER: ${NC_ADMIN_USER:-admin}
+      NEXTCLOUD_ADMIN_PASSWORD: ${NC_ADMIN_PASSWORD:-adminpassword}
+      NEXTCLOUD_TRUSTED_DOMAINS: "localhost 127.0.0.1 nextcloud"
+      OVERWRITEPROTOCOL: http
+      OVERWRITECLIURL: http://localhost:8080
+      NC_default_phone_region: IN
+      NC_knowledgebaseenabled: "false"
+      NC_allow_user_to_change_display_name: "true"
+      FRONTEND_URL: "${FRONTEND_URL:-http://localhost:3000}"
+    volumes:
+      - nextcloud_data:/var/www/html
+      - ./themes/headless:/var/www/html/themes/headless
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    networks:
+      - nextcloud_net
+    ports:
+      - "8090:80"
+    volumes:
+      - ./nginx.dev.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      nextcloud:
+        condition: service_healthy
+
+networks:
+  nextcloud_net:
+    driver: bridge
+
+volumes:
+  db_data:
+  nextcloud_data:

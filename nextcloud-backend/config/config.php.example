@@ -1,0 +1,22 @@
+<?php
+
+declare(strict_types=1);
+
+$CONFIG = [
+	'trusted_domains' => [
+		'your-nextcloud-domain.com',
+	],
+	'trusted_proxies' => [
+		'nginx',
+	],
+	'forwarded_for_headers' => ['HTTP_X_FORWARDED_FOR'],
+	'overwrite.cli.url' => 'https://your-nextcloud-domain.com',
+	'overwriteprotocol' => 'https',
+	'htaccess.RewriteBase' => '/',
+	'defaultapp' => '',
+	'theme' => 'headless',
+	'bruteForce.protection.enabled' => true,
+	'auth.bruteforce.protection.enabled' => true,
+	'ratelimit.protection.enabled' => true,
+	'shareapi_allow_public_upload' => false,
+];
