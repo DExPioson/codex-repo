@@ -64,7 +64,7 @@ services:
       NC_default_phone_region: IN
       NC_knowledgebaseenabled: "false"
       NC_allow_user_to_change_display_name: "true"
-      FRONTEND_URL: "${FRONTEND_URL:-http://localhost:3000}"
+      FRONTEND_URL: "${FRONTEND_URL:-http://localhost:5173}"
     volumes:
       - nextcloud_data:/var/www/html
       - ./themes/headless:/var/www/html/themes/headless

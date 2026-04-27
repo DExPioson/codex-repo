@@ -1,4 +1,4 @@
-import { chromium, type FullConfig } from "@playwright/test";
+import { chromium } from "@playwright/test";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -6,9 +6,21 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const AUTH_DIR = path.join(__dirname, ".auth");
 const STORAGE_STATE_PATH = path.join(AUTH_DIR, "session.json");
+const API_BASE_URL = process.env.VITE_API_PROXY_TARGET || `http://localhost:${process.env.PORT || "5000"}`;
+const E2E_EMAIL = process.env.E2E_EMAIL || "e2e-user";
+const E2E_PASSWORD = process.env.E2E_PASSWORD || "set-e2e-password";
 
-async function globalSetup(_config: FullConfig) {
+function assertE2ECredentialsConfigured() {
+  if (E2E_EMAIL === "e2e-user" || E2E_PASSWORD === "set-e2e-password") {
+    throw new Error(
+      "Playwright E2E credentials are not configured. Set E2E_EMAIL and E2E_PASSWORD before running tests.",
+    );
+  }
+}
+
+async function globalSetup() {
   fs.mkdirSync(AUTH_DIR, { recursive: true });
+  assertE2ECredentialsConfigured();
 
   // Log in via the API to establish a session cookie
   const browser = await chromium.launch();
@@ -16,10 +28,10 @@ async function globalSetup(_config: FullConfig) {
   const page = await context.newPage();
 
   // POST login to get session cookie
-  const response = await page.request.post("http://localhost:5001/api/auth/login", {
+  const response = await page.request.post(`${API_BASE_URL}/api/auth/login`, {
     data: {
-      email: "cloudqa1",
-      password: "CloudQA1!2026",
+      email: E2E_EMAIL,
+      password: E2E_PASSWORD,
     },
   });
 

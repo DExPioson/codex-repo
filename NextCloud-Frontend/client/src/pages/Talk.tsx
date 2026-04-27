@@ -10,7 +10,7 @@ import {
   ChevronRight, PhoneIncoming,
 } from "lucide-react";
 import { cn, getAvatarColor, getInitials } from "@/lib/utils";
-import { apiRequest } from "@/lib/api";
+import { apiRequest, fetchJson } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
@@ -58,6 +58,19 @@ const SEEDED_CONTACTS = [
   "Anjali Gupta", "Rahul Verma", "Kavita Reddy", "Deepak Malhotra", "Sneha Iyer",
   "QA Alex", "QA Bella", "QA Chris", "QA Diana", "QA Ethan",
 ];
+
+function getPreferredConversationId(conversations: Conversation[]) {
+  const noteToSelf = conversations.find((conversation) => conversation.name === "Note to self");
+  if (noteToSelf) return noteToSelf.id;
+
+  const firstDirectMessage = conversations.find((conversation) => conversation.type === "dm");
+  if (firstDirectMessage) return firstDirectMessage.id;
+
+  const firstNonAnnouncement = conversations.find((conversation) => conversation.name !== "Talk updates ✅");
+  if (firstNonAnnouncement) return firstNonAnnouncement.id;
+
+  return conversations[0]?.id ?? null;
+}
 
 // â”€â”€â”€ Toast system â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
@@ -895,41 +908,30 @@ export default function Talk() {
   // Queries
   const { data: conversationsData } = useQuery({
     queryKey: ["/api/conversations"],
-    queryFn: async () => {
-      const res = await fetch("/api/conversations");
-      return res.json() as Promise<{ data: Conversation[] }>;
-    },
+    queryFn: () => fetchJson<{ data: Conversation[] }>("/api/conversations"),
   });
 
   const conversations = conversationsData?.data || [];
   const activeConversation = conversations.find((c) => c.id === activeConversationId);
   const { data: currentUserData } = useQuery({
     queryKey: ["/api/user"],
-    queryFn: async () => {
-      const res = await fetch("/api/user");
-      return res.json() as Promise<{ data: { id?: number; name?: string } }>;
-    },
+    queryFn: () => fetchJson<{ data: { id?: number; name?: string } }>("/api/user"),
   });
   const currentUserId = currentUserData?.data?.id || 0;
   const currentUserName = currentUserData?.data?.name || "You";
 
-  const { data: messagesData } = useQuery({
+  const messagesQuery = useQuery({
     queryKey: ["/api/conversations/messages", activeConversationId],
-    queryFn: async () => {
-      const res = await fetch(`/api/conversations/${activeConversationId}/messages`);
-      return res.json() as Promise<{ data: Message[] }>;
-    },
+    queryFn: () => fetchJson<{ data: Message[] }>(`/api/conversations/${activeConversationId}/messages`),
     enabled: !!activeConversationId,
   });
 
+  const { data: messagesData } = messagesQuery;
   const messagesList = messagesData?.data || [];
 
   const { data: callSignalData } = useQuery({
     queryKey: ["/api/conversations/call", activeConversationId],
-    queryFn: async () => {
-      const res = await fetch(`/api/conversations/${activeConversationId}/call`);
-      return res.json() as Promise<{ data: ConversationCallSignal | null }>;
-    },
+    queryFn: () => fetchJson<{ data: ConversationCallSignal | null }>(`/api/conversations/${activeConversationId}/call`),
     enabled: !!activeConversationId,
     refetchInterval: 1500,
   });
@@ -938,7 +940,7 @@ export default function Talk() {
   // Set first conversation as active on load
   useEffect(() => {
     if (conversations.length && !activeConversationId) {
-      setActiveConversationId(conversations[0].id);
+      setActiveConversationId(getPreferredConversationId(conversations));
     }
   }, [conversations, activeConversationId]);
 
@@ -1308,9 +1310,45 @@ export default function Talk() {
       const res = await apiRequest("POST", `/api/conversations/${activeConversationId}/messages`, { content });
       return res.json() as Promise<{ data: Message }>;
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/conversations/messages", activeConversationId] });
+    onSuccess: async (result, content) => {
+      queryClient.setQueryData(
+        ["/api/conversations/messages", activeConversationId],
+        (old: { data: Message[] } | undefined) => {
+          const existing = old?.data || [];
+          const withoutOptimistic = existing.filter(
+            (message) =>
+              !(
+                message.id >= 1_000_000_000_000 &&
+                message.senderId === currentUserId &&
+                message.content === content
+              ),
+          );
+
+          if (withoutOptimistic.some((message) => message.id === result.data.id)) {
+            return { data: withoutOptimistic };
+          }
+
+          return { data: [...withoutOptimistic, result.data] };
+        },
+      );
+      await messagesQuery.refetch();
       queryClient.invalidateQueries({ queryKey: ["/api/conversations"] });
+    },
+    onError: (_, content) => {
+      queryClient.setQueryData(
+        ["/api/conversations/messages", activeConversationId],
+        (old: { data: Message[] } | undefined) => ({
+          data: (old?.data || []).filter(
+            (message) =>
+              !(
+                message.id >= 1_000_000_000_000 &&
+                message.senderId === currentUserId &&
+                message.content === content
+              ),
+          ),
+        }),
+      );
+      showToast("Unable to send message");
     },
   });
 

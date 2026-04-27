@@ -1,8 +1,17 @@
 import { type Page, expect } from "@playwright/test";
 
-export const BASE_URL = "http://localhost:5174";
+export const BASE_URL = `http://localhost:${process.env.VITE_PORT || "5173"}`;
+const E2E_EMAIL = process.env.E2E_EMAIL || "e2e-user";
+const E2E_PASSWORD = process.env.E2E_PASSWORD || "set-e2e-password";
+
+function assertE2ECredentialsConfigured() {
+  if (E2E_EMAIL === "e2e-user" || E2E_PASSWORD === "set-e2e-password") {
+    throw new Error("Set E2E_EMAIL and E2E_PASSWORD before running Playwright tests.");
+  }
+}
 
 export async function login(page: Page) {
+  assertE2ECredentialsConfigured();
   await page.goto("/#/");
   await page.waitForLoadState("networkidle");
 
@@ -18,8 +27,8 @@ export async function login(page: Page) {
   const hasLoginForm = await email.isVisible({ timeout: 3000 }).catch(() => false);
 
   if (hasLoginForm) {
-    await email.fill("cloudqa1");
-    await password.fill("CloudQA1!2026");
+    await email.fill(E2E_EMAIL);
+    await password.fill(E2E_PASSWORD);
     await page.getByRole("button", { name: "Sign in" }).click();
     await page.waitForURL(/\/#\/$/);
     await page.waitForLoadState("networkidle");
@@ -28,7 +37,7 @@ export async function login(page: Page) {
   }
 
   await page.request.post("/api/auth/login", {
-    data: { email: "cloudqa1", password: "CloudQA1!2026" },
+    data: { email: E2E_EMAIL, password: E2E_PASSWORD },
   });
   await page.goto("/#/");
   await page.waitForLoadState("networkidle");

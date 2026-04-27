@@ -9,6 +9,7 @@ import {
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { fetchJson } from "@/lib/api";
 
 function getGreeting() {
   const h = new Date().getHours();
@@ -63,7 +64,7 @@ function StorageRing({ used, quota, size = 80 }: { used: number; quota: number; 
 export default function Dashboard() {
   const { data, isLoading } = useQuery({
     queryKey: ["/api/dashboard"],
-    queryFn: () => fetch("/api/dashboard").then((r) => r.json()).then((r) => r.data),
+    queryFn: () => fetchJson<{ data: unknown }>("/api/dashboard").then((response) => response.data),
   });
 
   return (

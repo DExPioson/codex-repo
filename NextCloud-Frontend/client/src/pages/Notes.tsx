@@ -6,7 +6,7 @@ import {
   ListOrdered, ListChecks, Code, Quote, Eye, EyeOff, X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { apiRequest } from "@/lib/api";
+import { apiRequest, fetchJson } from "@/lib/api";
 import { formatRelative } from "@/lib/dateUtils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -216,6 +216,7 @@ export default function Notes() {
   const [tagInput, setTagInput] = useState("");
   const [lastSaved, setLastSaved] = useState<string | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [isCreatingNote, setIsCreatingNote] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const titleRef = useRef<HTMLInputElement>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout>>();
@@ -223,10 +224,7 @@ export default function Notes() {
   // Queries
   const { data: notesData } = useQuery({
     queryKey: ["/api/notes"],
-    queryFn: async () => {
-      const res = await fetch("/api/notes");
-      return res.json() as Promise<{ data: Note[] }>;
-    },
+    queryFn: () => fetchJson<{ data: Note[] }>("/api/notes"),
   });
 
   const notes = notesData?.data || [];
@@ -234,11 +232,22 @@ export default function Notes() {
 
   // Set first note as active on load
   useEffect(() => {
-    if (notes.length && !activeNoteId) {
+    if (notes.length && !activeNoteId && !isCreatingNote) {
       const first = notes[0];
       setActiveNoteId(first.id);
       setTitle(first.title);
       setContent(first.content);
+    }
+  }, [notes, activeNoteId, isCreatingNote]);
+
+  useEffect(() => {
+    if (!activeNoteId) return;
+    const nextActive = notes.find((note) => note.id === activeNoteId);
+    if (!nextActive) return;
+
+    if (!saveMutation.isPending) {
+      setTitle(nextActive.title);
+      setContent(nextActive.content);
     }
   }, [notes, activeNoteId]);
 
@@ -260,10 +269,14 @@ export default function Notes() {
 
   const saveMutation = useMutation({
     mutationFn: async ({ id, title: t, content: c }: { id: number; title: string; content: string }) => {
-      await apiRequest("PATCH", `/api/notes/${id}`, { title: t, content: c });
+      const response = await apiRequest("PATCH", `/api/notes/${id}`, { title: t, content: c });
+      return response.json() as Promise<{ data: Note }>;
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/notes"] });
+    onSuccess: async (result) => {
+      setActiveNoteId(result.data.id);
+      setTitle(result.data.title);
+      setContent(result.data.content);
+      await queryClient.invalidateQueries({ queryKey: ["/api/notes"] });
       setLastSaved("just now");
     },
   });
@@ -280,13 +293,19 @@ export default function Notes() {
       });
       return res.json() as Promise<{ data: Note }>;
     },
-    onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: ["/api/notes"] });
+    onMutate: () => {
+      setIsCreatingNote(true);
+    },
+    onSuccess: async (result) => {
       setActiveNoteId(result.data.id);
-      setTitle("Untitled");
-      setContent("");
+      setTitle(result.data.title);
+      setContent(result.data.content);
       setPreviewMode(false);
+      await queryClient.invalidateQueries({ queryKey: ["/api/notes"] });
       requestAnimationFrame(() => titleRef.current?.focus());
+    },
+    onSettled: () => {
+      setIsCreatingNote(false);
     },
   });
 

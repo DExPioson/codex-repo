@@ -7,7 +7,7 @@ import {
   GripVertical, Check,
 } from "lucide-react";
 import { cn, getAvatarColor, getInitials } from "@/lib/utils";
-import { apiRequest } from "@/lib/api";
+import { apiRequest, fetchJson } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -438,17 +438,20 @@ export default function Deck() {
   const queryClient = useQueryClient();
   const { data: currentUserData } = useQuery<{ data: { name?: string } }>({
     queryKey: ["/api/user"],
-    queryFn: () => fetch("/api/user").then((r) => r.json()),
+    queryFn: () => fetchJson<{ data: { name?: string } }>("/api/user"),
   });
   const currentUserName = currentUserData?.data?.name || "You";
 
   // Fetch boards list
   const { data: boardsData } = useQuery<{ data: Board[] }>({
     queryKey: ["/api/boards"],
-    queryFn: () => fetch("/api/boards").then(r => r.json()),
+    queryFn: () => fetchJson<{ data: Board[] }>("/api/boards"),
   });
   const boards = boardsData?.data ?? [];
   const [activeBoardId, setActiveBoardId] = useState<number | null>(null);
+  const [newBoardName, setNewBoardName] = useState("");
+  const [showNewBoard, setShowNewBoard] = useState(false);
+  const resolvedBoardId = activeBoardId ?? boards[0]?.id ?? null;
 
   // Set first board as default
   useEffect(() => {
@@ -459,9 +462,9 @@ export default function Deck() {
 
   // Fetch board data
   const { data: boardData } = useQuery<{ data: BoardData }>({
-    queryKey: ["/api/boards/", activeBoardId],
-    queryFn: () => fetch(`/api/boards/${activeBoardId}`).then(r => r.json()),
-    enabled: activeBoardId !== null,
+    queryKey: ["/api/boards/", resolvedBoardId],
+    queryFn: () => fetchJson<{ data: BoardData }>(`/api/boards/${resolvedBoardId}`),
+    enabled: resolvedBoardId !== null,
   });
 
   const board = boardData?.data?.board;
@@ -514,26 +517,46 @@ export default function Deck() {
 
   const addCardMutation = useMutation({
     mutationFn: ({ stackId, title }: { stackId: number; title: string }) =>
-      apiRequest("POST", `/api/boards/${activeBoardId}/stacks/${stackId}/cards`, {
+      apiRequest("POST", `/api/boards/${resolvedBoardId}/stacks/${stackId}/cards`, {
         title,
         priority: "medium",
         order: localStacks.find(s => s.id === stackId)?.cards.length ?? 0,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/boards/", activeBoardId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/boards/", resolvedBoardId] });
     },
   });
 
   const addStackMutation = useMutation({
     mutationFn: (title: string) =>
-      apiRequest("POST", `/api/boards/${activeBoardId}/stacks`, {
+      apiRequest("POST", `/api/boards/${resolvedBoardId}/stacks`, {
         title,
         order: localStacks.length,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/boards/", activeBoardId] });
+      queryClient.invalidateQueries({ queryKey: ["/api/boards/", resolvedBoardId] });
       setShowNewStack(false);
       setNewStackName("");
+    },
+  });
+
+  const createBoardMutation = useMutation({
+    mutationFn: async (title: string) => {
+      const response = await apiRequest("POST", "/api/boards", {
+        title,
+        color: "#4F46E5",
+      });
+      return response.json() as Promise<{ data: Board }>;
+    },
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: ["/api/boards"] });
+      setActiveBoardId(result.data.id);
+      setShowNewBoard(false);
+      setNewBoardName("");
+      showToast("Board created");
+    },
+    onError: () => {
+      showToast("Unable to create board");
     },
   });
 
@@ -576,7 +599,7 @@ export default function Deck() {
       {/* Toolbar */}
       <div className="px-4 py-3 border-b flex items-center gap-3 flex-shrink-0">
         <Select
-          value={activeBoardId ? String(activeBoardId) : ""}
+          value={resolvedBoardId ? String(resolvedBoardId) : ""}
           onValueChange={v => setActiveBoardId(Number(v))}
         >
           <SelectTrigger className="w-[200px]">
@@ -613,7 +636,7 @@ export default function Deck() {
           ))}
         </div>
 
-        <Button variant="outline" size="sm" className="gap-1" onClick={() => showToast("Board creation coming soon")}>
+        <Button variant="outline" size="sm" className="gap-1" onClick={() => setShowNewBoard(true)}>
           <Plus size={14} /> New Board
         </Button>
         <Button variant="outline" size="sm" className="gap-1" onClick={() => setShowNewStack(true)}>
@@ -640,6 +663,24 @@ export default function Deck() {
         </div>
       )}
 
+      {showNewBoard && (
+        <div className="px-4 py-2 border-b flex items-center gap-2 bg-muted/30">
+          <Input
+            autoFocus
+            className="max-w-xs"
+            placeholder="Board name…"
+            value={newBoardName}
+            onChange={e => setNewBoardName(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === "Enter" && newBoardName.trim()) createBoardMutation.mutate(newBoardName.trim());
+              if (e.key === "Escape") { setShowNewBoard(false); setNewBoardName(""); }
+            }}
+          />
+          <Button size="sm" onClick={() => { if (newBoardName.trim()) createBoardMutation.mutate(newBoardName.trim()); }}>Create</Button>
+          <Button size="sm" variant="ghost" onClick={() => { setShowNewBoard(false); setNewBoardName(""); }}>Cancel</Button>
+        </div>
+      )}
+
       {/* Board */}
       <DragDropContext onDragEnd={handleDragEnd}>
         <div className="flex gap-4 p-4 overflow-x-auto flex-1 items-start">
@@ -652,11 +693,20 @@ export default function Deck() {
               onAddCard={(stackId, title) => addCardMutation.mutate({ stackId, title })}
             />
           ))}
-          {filteredStacks.length === 0 && !showNewStack && (
+          {resolvedBoardId === null ? (
+            <div className="flex items-center justify-center flex-1 h-full">
+              <div className="text-center">
+                <p className="text-muted-foreground text-sm">No boards yet</p>
+                <Button variant="outline" size="sm" className="mt-3 gap-1" onClick={() => setShowNewBoard(true)}>
+                  <Plus size={14} /> Create board
+                </Button>
+              </div>
+            </div>
+          ) : filteredStacks.length === 0 && !showNewStack ? (
             <div className="flex items-center justify-center flex-1 h-full">
               <p className="text-muted-foreground text-sm">Select a board to get started</p>
             </div>
-          )}
+          ) : null}
         </div>
       </DragDropContext>
 

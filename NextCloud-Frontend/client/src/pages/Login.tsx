@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { CloudSpaceLogo } from "@/components/layout/CloudSpaceLogo";
+import type { AppCapabilities } from "@/lib/capabilities";
 
 export default function Login() {
   const queryClient = useQueryClient();
@@ -41,6 +42,11 @@ export default function Login() {
       }
 
       queryClient.setQueryData(["/api/auth/session"], payload?.user ?? true);
+      const capabilitiesResponse = await fetch("/api/capabilities");
+      if (capabilitiesResponse.ok) {
+        const capabilities = (await capabilitiesResponse.json()) as AppCapabilities;
+        queryClient.setQueryData(["/api/capabilities"], capabilities);
+      }
       setLocation("/");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to sign in.");
@@ -63,7 +69,9 @@ export default function Login() {
           <div className="mb-6 flex flex-col items-center">
             <CloudSpaceLogo size={40} />
             <h1 className="mt-3 text-xl font-semibold text-foreground">CloudSpace</h1>
-            <p className="mt-1 text-sm text-muted-foreground">Sign in with your Nextcloud account</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Sign in with your Nextcloud password or app password
+            </p>
           </div>
 
           {error && (
@@ -86,12 +94,12 @@ export default function Login() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
+              <Label htmlFor="password">Password or app password</Label>
               <div className="relative">
                 <Input
                   id="password"
                   type={showPassword ? "text" : "password"}
-                  placeholder="Enter your password"
+                  placeholder="Enter your password or app password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   required
@@ -132,6 +140,11 @@ export default function Login() {
             </Button>
           </form>
 
+          <p className="mt-3 text-xs text-muted-foreground">
+            Production deployments should prefer app passwords. Standard passwords are only used
+            during a one-time bootstrap when the server can exchange them safely.
+          </p>
+
           <div className="relative my-6">
             <div className="absolute inset-0 flex items-center">
               <div className="w-full border-t" />
@@ -141,9 +154,9 @@ export default function Login() {
             </div>
           </div>
 
-          <Button variant="outline" className="w-full" type="button">
+          <Button variant="outline" className="w-full" type="button" disabled>
             <Building2 className="mr-2 h-4 w-4" />
-            Continue with SSO
+            SSO coming in a later release
           </Button>
 
           <p className="mt-4 text-center text-xs text-muted-foreground">Powered by Nextcloud</p>

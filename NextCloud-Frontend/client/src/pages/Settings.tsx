@@ -6,7 +6,7 @@ import {
   Trash2, Download, Zap, Plus, ExternalLink, X, AlertCircle,
 } from "lucide-react";
 import { cn, getInitials } from "@/lib/utils";
-import { apiRequest } from "@/lib/api";
+import { apiRequest, fetchJson } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -65,7 +65,7 @@ function ProfileSection() {
   const queryClient = useQueryClient();
   const { data } = useQuery<{ data: { name: string; email: string } }>({
     queryKey: ["/api/user"],
-    queryFn: () => fetch("/api/user").then((r) => r.json()),
+    queryFn: () => fetchJson<{ data: { name: string; email: string } }>("/api/user"),
   });
   const user = data?.data;
 

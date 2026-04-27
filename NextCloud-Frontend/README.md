@@ -1,5 +1,9 @@
 # CloudSpace
 
+This branch uses the adapter login flow at `POST /api/auth/login` as its single active auth strategy.
+On successful login the adapter tries to exchange a real password for a Nextcloud app password,
+then persists only the delegated app password in server-side session storage.
+
 A modern React frontend for self-hosted Nextcloud. CloudSpace replaces Nextcloud's default web interface with a fast, polished single-page application built with React 19, Tailwind CSS, and shadcn/ui. The Express backend acts as an API adapter — translating CloudSpace's clean REST API into Nextcloud's mix of OCS, WebDAV, CalDAV, CardDAV, and REST endpoints. The frontend code is completely decoupled from Nextcloud internals.
 
 ---
@@ -108,21 +112,34 @@ npx playwright install    # optional — only needed if running E2E tests
 
 ### 2. Environment Configuration
 
-The `.env` file in the project root configures the API adapter:
+The `.env` file in the project root configures the API adapter and Vite proxy targets:
 
 ```env
-NC_BASE_URL=http://localhost:8080
+NC_BASE_URL=http://localhost:8090
 SESSION_SECRET=cloudspace-dev-secret-change-in-prod
-NODE_TLS_REJECT_UNAUTHORIZED=0
+SESSION_DB_PATH=./sessions.db
+SESSION_COOKIE_SECURE=false
+ALLOW_MOCK_SERVICES=false
 PORT=5000
+VITE_PORT=5173
+VITE_API_PROXY_TARGET=http://localhost:5000
+VITE_NEXTCLOUD_PROXY_TARGET=http://localhost:8090
 ```
 
 | Variable | Value | Purpose |
 |----------|-------|---------|
-| `NC_BASE_URL` | `http://localhost:8080` | Nextcloud instance URL. The adapter sends all API calls here. |
-| `SESSION_SECRET` | Any string | Express session signing secret. Change in production. |
-| `NODE_TLS_REJECT_UNAUTHORIZED` | `0` | Disables TLS certificate verification. Required for self-signed certs. |
+| `NC_BASE_URL` | `http://localhost:8090` | Nextcloud gateway URL used by the adapter. |
+| `SESSION_SECRET` | Any string | Secret used to encrypt stored session payloads. Change in production. |
+| `SESSION_DB_PATH` | `./sessions.db` | Persistent SQLite session store path. |
+| `SESSION_COOKIE_SECURE` | `false` locally / `true` in prod | Enables `Secure` on the auth cookie. |
+| `SESSION_TTL_SECONDS` | `43200` | Adapter session lifetime in seconds. |
+| `ALLOW_MOCK_SERVICES` | `false` | Disables mock-backed endpoints unless explicitly re-enabled. |
+| `NEXTCLOUD_BOOTSTRAP_STRATEGY` | `exchange-or-direct` | Tries to exchange a login password for an app password, or accepts a direct app password. |
+| `NEXTCLOUD_APP_PASSWORD_LABEL` | `CloudSpace Adapter` | Label/User-Agent used when requesting a delegated Nextcloud app password. |
 | `PORT` | `5000` | Express adapter port. Vite proxies `/api` to this port. |
+| `VITE_PORT` | `5173` | Frontend dev server port. |
+| `VITE_API_PROXY_TARGET` | `http://localhost:5000` | API proxy target for `/api`. |
+| `VITE_NEXTCLOUD_PROXY_TARGET` | `http://localhost:8090` | Proxy target for `/ocs` and `/remote.php`. |
 
 ### 3. Nextcloud Backend Setup
 
@@ -372,7 +389,7 @@ NC_BASE_URL="http://localhost:8080" bash seed/seed.sh
 | Routing | wouter (hash-based) | 3.9.0 |
 | Data Fetching | TanStack Query | 5.96.2 |
 | Server | Express | 5.2.1 |
-| Session | express-session + connect-sqlite3 | 1.19.0 |
+| Session | Encrypted SQLite-backed custom store | built-in |
 | XML Parsing | xml2js | 0.6.2 |
 | iCal/vCard | ical.js | 2.2.1 |
 | Drag & Drop | @hello-pangea/dnd | 18.0.1 |

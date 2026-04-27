@@ -15,6 +15,7 @@ import {
   DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { fetchJson } from "@/lib/api";
 import { CommandPalette } from "./CommandPalette";
 
 // ─── Toast ─────────────────────────────────────────────────
@@ -78,10 +79,7 @@ export function TopBar({ sidebarCollapsed }: TopBarProps) {
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const { data: userData } = useQuery({
     queryKey: ["/api/user"],
-    queryFn: async () => {
-      const res = await fetch("/api/user");
-      return res.json() as Promise<{ data: { name?: string; email?: string } }>;
-    },
+    queryFn: () => fetchJson<{ data: { name?: string; email?: string } }>("/api/user"),
   });
   const userName = userData?.data?.name || "User";
   const userEmail = userData?.data?.email || "";

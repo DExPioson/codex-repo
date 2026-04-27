@@ -1,5 +1,9 @@
 # CloudSpace LLM Handoff Document
 
+> **Status update (2026-04-23)**: This document contains stale references to OAuth/PKCE and `express-session`.
+> The current branch uses `/api/auth/login` as the single auth flow, stores encrypted sessions in SQLite,
+> defaults to frontend port `5173`, and disables mock-backed endpoints unless `ALLOW_MOCK_SERVICES=true`.
+
 > **Purpose**: Context transfer for an LLM to continue building CloudSpace from Prompt #09 onward.
 > **Last updated**: 2026-04-09 | **Last completed prompt**: #08 (Polish Pass) + NC Adapter Integration + Playwright E2E Suite
 > **BREAKING CHANGE**: The mock Express/SQLite backend has been **replaced** with a live Nextcloud API adapter. All data now comes from a real Nextcloud 28 instance.

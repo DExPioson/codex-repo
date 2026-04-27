@@ -12,8 +12,14 @@ dist
 dist-ssr
 *.local
 .env
+.env.development
+.env.*.local
 dev.db
+dev.db-shm
+dev.db-wal
 sessions.db
+sessions.db-shm
+sessions.db-wal
 test-results/
 playwright/.auth/
 

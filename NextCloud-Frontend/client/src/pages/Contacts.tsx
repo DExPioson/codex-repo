@@ -6,7 +6,7 @@ import {
   MoreVertical, Pencil, Trash2, X, ChevronDown,
 } from "lucide-react";
 import { cn, getAvatarColor, getInitials } from "@/lib/utils";
-import { apiRequest } from "@/lib/api";
+import { apiRequest, fetchJson } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -67,6 +67,9 @@ function ContactDialog({
       onOpenChange(false);
       onSaved();
       showToast(contact ? "Contact updated" : "Contact created");
+    },
+    onError: (error) => {
+      showToast(error instanceof Error ? error.message : "Unable to save contact");
     },
   });
 
@@ -158,7 +161,7 @@ export default function Contacts() {
   const queryClient = useQueryClient();
   const { data: contactsData } = useQuery<{ data: Contact[] }>({
     queryKey: ["/api/contacts"],
-    queryFn: () => fetch("/api/contacts").then(r => r.json()),
+    queryFn: () => fetchJson<{ data: Contact[] }>("/api/contacts"),
   });
 
   const contacts = contactsData?.data ?? [];

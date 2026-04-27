@@ -8,47 +8,59 @@ test.describe("File Browser", () => {
     await page.waitForLoadState("networkidle");
   });
 
-  test("File browser loads with seed data", async ({ page }) => {
-    // Should see folder icons (seed has folders)
-    await expect(page.locator("svg.lucide-folder").first()).toBeVisible();
-    // Footer or items visible
-    const items = page.locator("text=/\\d+ items/");
-    await expect(items).toBeVisible({ timeout: 5000 });
+  test("Files page loads with toolbar actions", async ({ page }) => {
+    await expect(page.getByRole("button", { name: "New Folder" })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole("button", { name: "Upload" })).toBeVisible({ timeout: 10000 });
+    await expect(page.locator("nav button").first()).toBeVisible({ timeout: 10000 });
   });
 
-  test("Toggle between grid and list view", async ({ page }) => {
-    const gridBtn = page.locator("button").filter({ has: page.locator("svg.lucide-layout-grid") });
-    await gridBtn.click();
-    await page.waitForTimeout(500);
-    // Grid should be visible
-    await expect(page.locator(".grid").first()).toBeVisible();
+  test("Create a folder and navigate into it", async ({ page }) => {
+    const folderName = `E2E Folder ${Date.now()}`;
 
-    const listBtn = page.locator("button").filter({ has: page.locator("svg.lucide-list") });
-    await listBtn.click();
-    await page.waitForTimeout(300);
-  });
-
-  test("Navigate into a folder and back with breadcrumb", async ({ page }) => {
-    // Click a folder (the clickable area with the folder icon + name)
-    const folderRow = page.locator(".cursor-pointer").filter({ has: page.locator("svg.lucide-folder") }).first();
-    await folderRow.click();
-    await page.waitForTimeout(1000);
-
-    // Click Home in breadcrumb to go back
-    const breadcrumbHome = page.locator("nav button").filter({ has: page.locator("svg.lucide-home") });
-    if (await breadcrumbHome.isVisible()) {
-      await breadcrumbHome.click();
-      await page.waitForTimeout(1000);
-    }
-  });
-
-  test("Create a new folder", async ({ page }) => {
     await page.getByRole("button", { name: "New Folder" }).click();
     const dialog = page.locator('[role="dialog"]');
-    await expect(dialog).toBeVisible();
-    await dialog.locator("#folder-name").fill("Test Folder E2E");
+    await expect(dialog).toBeVisible({ timeout: 10000 });
+    await dialog.locator("#folder-name").fill(folderName);
     await dialog.getByRole("button", { name: "Create" }).click();
-    await page.waitForTimeout(1500);
-    await expect(page.locator("text=Test Folder E2E")).toBeVisible();
+
+    const folderRow = page.getByRole("button", { name: new RegExp(folderName) }).first();
+    await expect(folderRow).toBeVisible({ timeout: 10000 });
+    await folderRow.click();
+    const breadcrumbs = page.locator("nav").last();
+    await expect(breadcrumbs).toContainText(folderName, { timeout: 10000 });
+
+    await breadcrumbs.locator("button").first().click();
+    await expect(breadcrumbs).not.toContainText(folderName);
+  });
+
+  test("Upload, reload, download, and delete a file", async ({ page }) => {
+    const fileName = `e2e-upload-${Date.now()}.txt`;
+    const fileContents = `CloudSpace file smoke ${Date.now()}`;
+
+    await page.locator('input[type="file"]').setInputFiles({
+      name: fileName,
+      mimeType: "text/plain",
+      buffer: Buffer.from(fileContents, "utf8"),
+    });
+
+    await expect(page.getByText(`${fileName} uploaded`)).toBeVisible({ timeout: 10000 });
+    const fileRowButton = page.getByRole("button", { name: new RegExp(fileName) }).first();
+    await expect(fileRowButton).toBeVisible({ timeout: 10000 });
+
+    await page.reload();
+    await page.waitForLoadState("networkidle");
+    await expect(page.getByRole("button", { name: new RegExp(fileName) }).first()).toBeVisible({ timeout: 10000 });
+
+    const row = page.locator("div.grid").filter({ hasText: fileName }).last();
+    await row.getByRole("button").last().click();
+    const downloadPromise = page.waitForEvent("download");
+    await page.getByRole("menuitem", { name: "Download" }).click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toBe(fileName);
+
+    await row.getByRole("button").last().click();
+    await page.getByRole("menuitem", { name: "Delete" }).click();
+    await expect(page.getByText("Deleted successfully")).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole("button", { name: new RegExp(fileName) }).first()).toHaveCount(0);
   });
 });

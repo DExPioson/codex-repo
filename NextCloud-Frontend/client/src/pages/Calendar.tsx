@@ -9,7 +9,7 @@ import {
   ChevronLeft, ChevronRight, CalendarPlus, MapPin, Trash2, Clock, X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { apiRequest } from "@/lib/api";
+import { apiRequest, fetchJson } from "@/lib/api";
 import { formatEventTime, formatEventDate } from "@/lib/dateUtils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -600,10 +600,7 @@ export default function Calendar() {
 
   const { data: eventsData } = useQuery({
     queryKey: ["/api/events"],
-    queryFn: async () => {
-      const res = await fetch("/api/events");
-      return res.json() as Promise<{ data: Event[] }>;
-    },
+    queryFn: () => fetchJson<{ data: Event[] }>("/api/events"),
   });
 
   const allEvents = eventsData?.data || [];

@@ -8,7 +8,7 @@ import {
   FolderInput, Printer, X, ChevronDown,
 } from "lucide-react";
 import { cn, getAvatarColor, getInitials } from "@/lib/utils";
-import { apiRequest } from "@/lib/api";
+import { apiRequest, fetchJson } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -59,7 +59,7 @@ function ComposeDialog({
 
   const { data: contactsData } = useQuery<{ data: Contact[] }>({
     queryKey: ["/api/contacts"],
-    queryFn: () => fetch("/api/contacts").then(r => r.json()),
+    queryFn: () => fetchJson<{ data: Contact[] }>("/api/contacts"),
   });
   const contacts = contactsData?.data ?? [];
 
@@ -229,7 +229,7 @@ export default function Mail() {
   const [labelFilter, setLabelFilter] = useState<string | null>(null);
   const { data: currentUserData } = useQuery<{ data: { name?: string; email?: string } }>({
     queryKey: ["/api/user"],
-    queryFn: () => fetch("/api/user").then((r) => r.json()),
+    queryFn: () => fetchJson<{ data: { name?: string; email?: string } }>("/api/user"),
   });
   const currentUserName = currentUserData?.data?.name || "You";
   const currentUserEmail = currentUserData?.data?.email || "user@cloudspace.home";
@@ -238,19 +238,19 @@ export default function Mail() {
   const folderToFetch = activeFolder === "starred" ? "inbox" : activeFolder;
   const { data: emailsData } = useQuery<{ data: Email[] }>({
     queryKey: ["/api/emails", folderToFetch],
-    queryFn: () => fetch(`/api/emails?folder=${folderToFetch}`).then(r => r.json()),
+    queryFn: () => fetchJson<{ data: Email[] }>(`/api/emails?folder=${folderToFetch}`),
   });
 
   // Also fetch sent for starred
   const { data: sentData } = useQuery<{ data: Email[] }>({
     queryKey: ["/api/emails", "sent"],
-    queryFn: () => fetch("/api/emails?folder=sent").then(r => r.json()),
+    queryFn: () => fetchJson<{ data: Email[] }>("/api/emails?folder=sent"),
     enabled: activeFolder === "starred",
   });
 
   const { data: countsData } = useQuery<{ data: { inbox: number; drafts: number; spam: number } }>({
     queryKey: ["/api/emails/counts"],
-    queryFn: () => fetch("/api/emails/counts").then(r => r.json()),
+    queryFn: () => fetchJson<{ data: { inbox: number; drafts: number; spam: number } }>("/api/emails/counts"),
     staleTime: 30_000,
   });
   const counts = countsData?.data ?? { inbox: 0, drafts: 0, spam: 0 };
@@ -258,7 +258,7 @@ export default function Mail() {
   // Active email detail
   const { data: activeEmailData } = useQuery<{ data: Email }>({
     queryKey: ["/api/emails", activeEmailId],
-    queryFn: () => fetch(`/api/emails/${activeEmailId}`).then(r => r.json()),
+    queryFn: () => fetchJson<{ data: Email }>(`/api/emails/${activeEmailId}`),
     enabled: activeEmailId !== null,
   });
   const activeEmail = activeEmailData?.data;

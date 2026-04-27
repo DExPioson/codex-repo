@@ -1,19 +1,71 @@
 import express from "express";
 import { storage } from "./storage";
 import {
-  authenticateAgainstNextcloud,
-  clearNextcloudSession,
+  bootstrapDelegatedSession,
+  revokeDelegatedCredential,
+} from "./credential-provider";
+import {
   createFolder,
-  createNextcloudSession,
+  deleteFile,
+  downloadFile,
+  getFile,
   getCurrentUser,
   getDashboardData,
-  getNextcloudSession,
   listFiles,
+  uploadFile,
+} from "./nextcloud-client";
+import {
+  createBoard,
+  createCard,
+  createContact,
+  createConversation,
+  createEmail,
+  createEvent,
+  createNote,
+  createStack,
+  deleteCard,
+  deleteContact,
+  deleteConversation,
+  deleteEmail,
+  deleteEvent,
+  deleteNote,
+  getBoard,
+  getContact,
+  getConversation,
+  getEmail,
+  getEmailCounts,
+  getEvent,
+  getNote,
+  leaveConversation,
+  listContacts,
+  listConversationMessages,
+  listConversations,
+  listEmails,
+  listEvents,
+  listNotes,
+  listBoards,
+  markConversationRead,
+  sendConversationMessage,
+  setConversationModerator,
+  setConversationMute,
+  updateCard,
+  updateContact,
+  updateEmail,
+  updateEvent,
+  updateNote,
+} from "./groupware-client";
+import {
+  clearNextcloudSession,
+  createNextcloudSession,
+  getNextcloudSession,
   updateNextcloudSession,
-} from "./nextcloud";
+} from "./session-store";
+import { getCapabilities } from "./capability-store";
 
 const app = express();
 app.use(express.json());
+
+const ALLOW_MOCK_SERVICES = process.env.ALLOW_MOCK_SERVICES === "true";
 
 type ConversationCallState = {
   conversationId: number;
@@ -43,6 +95,43 @@ function requireNextcloudSession(req: express.Request, res: express.Response) {
   return session;
 }
 
+async function requireCapability(
+  session: NonNullable<ReturnType<typeof getNextcloudSession>>,
+  res: express.Response,
+  feature: "talk" | "deck" | "calendar" | "contacts" | "notes" | "mail" | "activity",
+) {
+  const snapshot = await getCapabilities(session);
+  if (!snapshot.capabilities[feature]) {
+    res.status(404).json({
+      error: "This feature is not available on the connected Nextcloud instance.",
+      code: "feature_unavailable",
+      feature,
+    });
+    return false;
+  }
+
+  return true;
+}
+
+function blockMockRoutes(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction,
+) {
+  if (ALLOW_MOCK_SERVICES) {
+    next();
+    return;
+  }
+
+  res.status(501).json({
+    ok: false,
+    error: "This endpoint still uses mock data and is disabled until it is wired to Nextcloud.",
+    code: "feature_unavailable",
+  });
+}
+
+app.use(/^\/api\/(activity|activities)(?:\/.*)?$/, blockMockRoutes);
+
 // Auth
 app.post("/api/auth/login", async (req, res) => {
   const { email, password } = req.body;
@@ -51,15 +140,24 @@ app.post("/api/auth/login", async (req, res) => {
   }
 
   try {
-    const { session, user } = await authenticateAgainstNextcloud(email, password);
+    const { session, user } = await bootstrapDelegatedSession(email, password);
     createNextcloudSession(res, session);
     res.json({ ok: true, user });
-  } catch (_error) {
+  } catch {
     res.status(401).json({ ok: false, message: "Invalid Nextcloud credentials." });
   }
 });
 
-app.post("/api/auth/logout", (req, res) => {
+app.post("/api/auth/logout", async (req, res) => {
+  const session = getNextcloudSession(req);
+  if (session) {
+    try {
+      await revokeDelegatedCredential(session);
+    } catch {
+      // Keep local logout resilient even if remote token revocation fails.
+    }
+  }
+
   clearNextcloudSession(req, res);
   res.json({ ok: true });
 });
@@ -71,10 +169,22 @@ app.get("/api/auth/session", async (req, res) => {
   try {
     const user = await getCurrentUser(session);
     res.json({ ok: true, user });
-  } catch (_error) {
+  } catch {
     clearNextcloudSession(req, res);
     res.status(401).json({ ok: false, message: "Nextcloud session expired." });
   }
+});
+
+app.get("/api/capabilities", async (req, res) => {
+  const session = getNextcloudSession(req);
+  const snapshot = await getCapabilities(session || undefined);
+
+  res.json({
+    ...snapshot.capabilities,
+    source: snapshot.source,
+    checkedAt: snapshot.checkedAt,
+    apps: snapshot.apps,
+  });
 });
 
 // User
@@ -85,7 +195,7 @@ app.get("/api/user", async (req, res) => {
   try {
     const user = await getCurrentUser(session);
     res.json({ data: user });
-  } catch (_error) {
+  } catch {
     res.status(502).json({ error: "Unable to load user from Nextcloud." });
   }
 });
@@ -104,7 +214,7 @@ app.patch("/api/user", async (req, res) => {
   try {
     const user = await getCurrentUser(getNextcloudSession(req) || session);
     res.json({ data: user });
-  } catch (_error) {
+  } catch {
     res.status(502).json({ error: "Unable to update user profile." });
   }
 });
@@ -115,9 +225,9 @@ app.get("/api/dashboard", async (req, res) => {
   if (!session) return;
 
   try {
-    const data = await getDashboardData(session);
+    const data = await getDashboardData(session, { includeMockData: ALLOW_MOCK_SERVICES });
     res.json({ data });
-  } catch (_error) {
+  } catch {
     res.status(502).json({ error: "Unable to load dashboard data from Nextcloud." });
   }
 });
@@ -131,30 +241,82 @@ app.get("/api/files", async (req, res) => {
   try {
     const files = await listFiles(session, parentPath);
     res.json({ data: files });
-  } catch (_error) {
+  } catch {
     res.status(502).json({ error: "Unable to load files from Nextcloud." });
   }
 });
 
-app.get("/api/files/:id", (req, res) => {
-  const file = storage.getFile(Number(req.params.id));
-  if (!file) return res.status(404).json({ error: "Not found" });
-  res.json({ data: file });
-});
-
-app.post("/api/files", async (req, res) => {
+app.get("/api/files/:id", async (req, res) => {
   const session = requireNextcloudSession(req, res);
   if (!session) return;
 
-  const { name, type = "folder", parentPath = "/" } = req.body;
-  if (type !== "folder") {
-    return res.status(501).json({ error: "Only folder creation is wired to Nextcloud right now." });
+  const cloudPath = typeof req.query.path === "string" ? req.query.path : "";
+  if (!cloudPath) {
+    return res.status(400).json({ error: "File path is required." });
   }
 
   try {
-    const file = await createFolder(session, parentPath, name);
+    if (req.query.download === "1") {
+      const file = await downloadFile(session, cloudPath);
+      res.setHeader("Content-Type", file.contentType);
+      res.setHeader("Content-Disposition", `attachment; filename="${encodeURIComponent(file.name)}"`);
+      res.send(file.buffer);
+      return;
+    }
+
+    const file = await getFile(session, cloudPath);
+    if (!file) return res.status(404).json({ error: "Not found" });
     res.json({ data: file });
-  } catch (_error) {
+  } catch {
+    res.status(502).json({ error: "Unable to load file from Nextcloud." });
+  }
+});
+
+app.post("/api/files", express.raw({ type: "application/octet-stream", limit: "100mb" }), async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+
+  const headerContentType = Array.isArray(req.headers["content-type"])
+    ? req.headers["content-type"][0] ?? ""
+    : req.headers["content-type"] ?? "";
+  const fileName = typeof req.headers["x-file-name"] === "string" ? req.headers["x-file-name"] : "";
+  const uploadParentPath = typeof req.headers["x-parent-path"] === "string" ? req.headers["x-parent-path"] : "/";
+  const uploadContentType =
+    typeof req.headers["x-file-content-type"] === "string" ? req.headers["x-file-content-type"] : "application/octet-stream";
+  const rawBody = Buffer.isBuffer(req.body) ? req.body : null;
+  const isBinaryUpload =
+    Boolean(fileName) ||
+    Boolean(rawBody) ||
+    (typeof headerContentType === "string" && headerContentType.startsWith("application/octet-stream"));
+
+  if (isBinaryUpload) {
+    if (!fileName || !rawBody) {
+      return res.status(400).json({ error: "Upload file name and content are required." });
+    }
+
+    try {
+      const file = await uploadFile(session, uploadParentPath, fileName, rawBody, uploadContentType);
+      res.json({ data: file });
+    } catch {
+      res.status(502).json({ error: "Unable to upload file to Nextcloud." });
+    }
+    return;
+  }
+
+  const requestBody = req.body && typeof req.body === "object" ? (req.body as Record<string, unknown>) : {};
+  const { name, type = "folder", parentPath: folderParentPath = "/" } = requestBody as {
+    name?: string;
+    type?: string;
+    parentPath?: string;
+  };
+  if (type !== "folder") {
+    return res.status(400).json({ error: "Unsupported file operation." });
+  }
+
+  try {
+    const file = await createFolder(session, folderParentPath, name);
+    res.json({ data: file });
+  } catch {
     res.status(502).json({ error: "Unable to create folder in Nextcloud." });
   }
 });
@@ -167,81 +329,146 @@ app.patch("/api/files/:id", (req, res) => {
   res.json({ data: updated });
 });
 
-app.delete("/api/files/:id", (req, res) => {
-  storage.deleteFile(Number(req.params.id));
-  res.json({ data: { success: true } });
+app.delete("/api/files/:id", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+
+  const cloudPath = typeof req.query.path === "string" ? req.query.path : "";
+  if (!cloudPath) {
+    return res.status(400).json({ error: "File path is required." });
+  }
+
+  try {
+    const result = await deleteFile(session, cloudPath);
+    res.json({ data: result });
+  } catch {
+    res.status(502).json({ error: "Unable to delete file from Nextcloud." });
+  }
 });
 
 // Conversations
-app.get("/api/conversations", (_req, res) => {
-  const convos = storage.getConversations();
-  convos.sort((a, b) => (b.lastMessageAt || "").localeCompare(a.lastMessageAt || ""));
-  res.json({ data: convos });
+app.get("/api/conversations", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "talk"))) return;
+
+  try {
+    res.json({ data: await listConversations(session) });
+  } catch {
+    res.status(502).json({ error: "Unable to load conversations from Nextcloud Talk." });
+  }
 });
-app.get("/api/conversations/:id", (req, res) => {
-  const conv = storage.getConversation(Number(req.params.id));
-  if (!conv) return res.status(404).json({ error: "Not found" });
-  res.json({ data: conv });
+app.get("/api/conversations/:id", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "talk"))) return;
+
+  try {
+    const conversation = await getConversation(session, Number(req.params.id));
+    if (!conversation) return res.status(404).json({ error: "Not found" });
+    res.json({ data: conversation });
+  } catch {
+    res.status(502).json({ error: "Unable to load conversation from Nextcloud Talk." });
+  }
 });
-app.post("/api/conversations", (req, res) => {
-  const conv = storage.createConversation(req.body);
-  res.json({ data: conv });
+app.post("/api/conversations", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "talk"))) return;
+
+  try {
+    const conversation = await createConversation(session, req.body?.name || "New conversation", req.body?.type || "group");
+    res.json({ data: conversation });
+  } catch {
+    res.status(502).json({ error: "Unable to create conversation in Nextcloud Talk." });
+  }
 });
-app.patch("/api/conversations/:id/read", (req, res) => {
-  storage.updateConversation(Number(req.params.id), { unreadCount: 0 });
-  res.json({ data: { success: true } });
+app.patch("/api/conversations/:id/read", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "talk"))) return;
+
+  try {
+    const success = await markConversationRead(session, Number(req.params.id));
+    res.json({ data: { success } });
+  } catch {
+    res.status(502).json({ error: "Unable to mark conversation as read." });
+  }
 });
-app.patch("/api/conversations/:id/mute", (req, res) => {
-  const updated = storage.updateConversation(Number(req.params.id), { isMuted: req.body.muted });
-  res.json({ data: { isMuted: updated?.isMuted } });
+app.patch("/api/conversations/:id/mute", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "talk"))) return;
+
+  try {
+    const updated = await setConversationMute(session, Number(req.params.id), Boolean(req.body?.muted));
+    if (!updated) return res.status(404).json({ error: "Not found" });
+    res.json({ data: updated });
+  } catch {
+    res.status(502).json({ error: "Unable to update conversation notification level." });
+  }
 });
-app.patch("/api/conversations/:id/admin", (req, res) => {
-  const updated = storage.updateConversation(Number(req.params.id), { adminId: req.body.adminId });
-  if (!updated) return res.status(404).json({ error: "Not found" });
-  res.json({ data: updated });
+app.patch("/api/conversations/:id/admin", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "talk"))) return;
+
+  try {
+    const updated = await setConversationModerator(session, Number(req.params.id), Number(req.body?.adminId));
+    if (!updated) return res.status(404).json({ error: "Not found" });
+    res.json({ data: updated });
+  } catch {
+    res.status(502).json({ error: "Unable to update conversation moderator." });
+  }
 });
-app.delete("/api/conversations/:id/members/me", (req, res) => {
-  storage.deleteConversation(Number(req.params.id));
-  res.json({ data: { success: true } });
+app.delete("/api/conversations/:id/members/me", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "talk"))) return;
+
+  try {
+    const success = await leaveConversation(session, Number(req.params.id));
+    res.json({ data: { success } });
+  } catch {
+    res.status(502).json({ error: "Unable to leave conversation." });
+  }
 });
-app.delete("/api/conversations/:id", (req, res) => {
-  storage.deleteConversation(Number(req.params.id));
-  res.json({ data: { success: true } });
+app.delete("/api/conversations/:id", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "talk"))) return;
+
+  try {
+    const success = await deleteConversation(session, Number(req.params.id));
+    res.json({ data: { success } });
+  } catch {
+    res.status(502).json({ error: "Unable to delete conversation." });
+  }
 });
 
 // Messages
-app.get("/api/conversations/:id/messages", (req, res) => {
-  const msgs = storage.getMessages(Number(req.params.id));
-  msgs.sort((a, b) => a.sentAt.localeCompare(b.sentAt));
-  res.json({ data: msgs });
+app.get("/api/conversations/:id/messages", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "talk"))) return;
+
+  try {
+    res.json({ data: await listConversationMessages(session, Number(req.params.id)) });
+  } catch {
+    res.status(502).json({ error: "Unable to load messages from Nextcloud Talk." });
+  }
 });
 app.post("/api/conversations/:id/messages", async (req, res) => {
   const session = requireNextcloudSession(req, res);
   if (!session) return;
+  if (!(await requireCapability(session, res, "talk"))) return;
 
-  const conversationId = Number(req.params.id);
-  const { content } = req.body;
-  const sentAt = new Date().toISOString();
-
-  let currentUser;
   try {
-    currentUser = await getCurrentUser(session);
-  } catch (_error) {
-    return res.status(502).json({ error: "Unable to resolve current user from Nextcloud." });
+    const message = await sendConversationMessage(session, Number(req.params.id), String(req.body?.content || ""));
+    res.json({ data: message });
+  } catch {
+    res.status(502).json({ error: "Unable to send message to Nextcloud Talk." });
   }
-
-  const msg = storage.createMessage({
-    conversationId,
-    senderId: currentUser.id,
-    senderName: currentUser.name,
-    content,
-    sentAt,
-  });
-  storage.updateConversation(conversationId, {
-    lastMessage: content,
-    lastMessageAt: sentAt,
-  });
-  res.json({ data: msg });
 });
 
 // Call signaling
@@ -342,153 +569,348 @@ app.post("/api/conversations/:id/call/end", (req, res) => {
 });
 
 // Events
-app.get("/api/events", (_req, res) => res.json({ data: storage.getEvents() }));
-app.get("/api/events/:id", (req, res) => {
-  const event = storage.getEvent(Number(req.params.id));
-  if (!event) return res.status(404).json({ error: "Not found" });
-  res.json({ data: event });
+app.get("/api/events", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "calendar"))) return;
+
+  try {
+    res.json({ data: await listEvents(session) });
+  } catch {
+    res.status(502).json({ error: "Unable to load events from Nextcloud Calendar." });
+  }
 });
-app.post("/api/events", (req, res) => {
-  const event = storage.createEvent(req.body);
-  res.json({ data: event });
+app.get("/api/events/:id", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "calendar"))) return;
+
+  try {
+    const event = await getEvent(session, Number(req.params.id));
+    if (!event) return res.status(404).json({ error: "Not found" });
+    res.json({ data: event });
+  } catch {
+    res.status(502).json({ error: "Unable to load event from Nextcloud Calendar." });
+  }
 });
-app.patch("/api/events/:id", (req, res) => {
-  const id = Number(req.params.id);
-  const existing = storage.getEvent(id);
-  if (!existing) return res.status(404).json({ error: "Not found" });
-  const updated = storage.updateEvent(id, req.body);
-  res.json({ data: updated });
+app.post("/api/events", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "calendar"))) return;
+
+  try {
+    res.json({ data: await createEvent(session, req.body) });
+  } catch {
+    res.status(502).json({ error: "Unable to create event in Nextcloud Calendar." });
+  }
 });
-app.delete("/api/events/:id", (req, res) => {
-  storage.deleteEvent(Number(req.params.id));
-  res.json({ data: { success: true } });
+app.patch("/api/events/:id", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "calendar"))) return;
+
+  try {
+    const updated = await updateEvent(session, Number(req.params.id), req.body);
+    if (!updated) return res.status(404).json({ error: "Not found" });
+    res.json({ data: updated });
+  } catch {
+    res.status(502).json({ error: "Unable to update event in Nextcloud Calendar." });
+  }
+});
+app.delete("/api/events/:id", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "calendar"))) return;
+
+  try {
+    const success = await deleteEvent(session, Number(req.params.id));
+    res.json({ data: { success } });
+  } catch {
+    res.status(502).json({ error: "Unable to delete event from Nextcloud Calendar." });
+  }
 });
 
 // Notes
-app.get("/api/notes", (_req, res) => {
-  const allNotes = storage.getNotes();
-  allNotes.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  res.json({ data: allNotes });
+app.get("/api/notes", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "notes"))) return;
+
+  try {
+    res.json({ data: await listNotes(session) });
+  } catch {
+    res.status(502).json({ error: "Unable to load notes from Nextcloud WebDAV." });
+  }
 });
-app.get("/api/notes/:id", (req, res) => {
-  const note = storage.getNote(Number(req.params.id));
-  if (!note) return res.status(404).json({ error: "Not found" });
-  res.json({ data: note });
+app.get("/api/notes/:id", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "notes"))) return;
+
+  try {
+    const note = await getNote(session, Number(req.params.id));
+    if (!note) return res.status(404).json({ error: "Not found" });
+    res.json({ data: note });
+  } catch {
+    res.status(502).json({ error: "Unable to load note from Nextcloud WebDAV." });
+  }
 });
-app.post("/api/notes", (req, res) => {
-  const note = storage.createNote(req.body);
-  res.json({ data: note });
+app.post("/api/notes", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "notes"))) return;
+
+  try {
+    res.json({ data: await createNote(session, req.body) });
+  } catch {
+    res.status(502).json({ error: "Unable to create note in Nextcloud WebDAV." });
+  }
 });
-app.patch("/api/notes/:id", (req, res) => {
-  const id = Number(req.params.id);
-  const existing = storage.getNote(id);
-  if (!existing) return res.status(404).json({ error: "Not found" });
-  const updated = storage.updateNote(id, { ...req.body, updatedAt: new Date().toISOString() });
-  res.json({ data: updated });
+app.patch("/api/notes/:id", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "notes"))) return;
+
+  try {
+    const updated = await updateNote(session, Number(req.params.id), req.body);
+    if (!updated) return res.status(404).json({ error: "Not found" });
+    res.json({ data: updated });
+  } catch {
+    res.status(502).json({ error: "Unable to update note in Nextcloud WebDAV." });
+  }
 });
-app.delete("/api/notes/:id", (req, res) => {
-  storage.deleteNote(Number(req.params.id));
-  res.json({ data: { success: true } });
+app.delete("/api/notes/:id", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "notes"))) return;
+
+  try {
+    const success = await deleteNote(session, Number(req.params.id));
+    res.json({ data: { success } });
+  } catch {
+    res.status(502).json({ error: "Unable to delete note from Nextcloud WebDAV." });
+  }
 });
 
 // Contacts
-app.get("/api/contacts", (_req, res) => {
-  const all = storage.getContacts();
-  all.sort((a, b) => a.name.localeCompare(b.name));
-  res.json({ data: all });
+app.get("/api/contacts", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "contacts"))) return;
+
+  try {
+    res.json({ data: await listContacts(session) });
+  } catch {
+    res.status(502).json({ error: "Unable to load contacts from Nextcloud CardDAV." });
+  }
 });
-app.get("/api/contacts/:id", (req, res) => {
-  const c = storage.getContact(Number(req.params.id));
-  if (!c) return res.status(404).json({ error: "Not found" });
-  res.json({ data: c });
+app.get("/api/contacts/:id", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "contacts"))) return;
+
+  try {
+    const contact = await getContact(session, Number(req.params.id));
+    if (!contact) return res.status(404).json({ error: "Not found" });
+    res.json({ data: contact });
+  } catch {
+    res.status(502).json({ error: "Unable to load contact from Nextcloud CardDAV." });
+  }
 });
-app.post("/api/contacts", (req, res) => {
-  const c = storage.createContact(req.body);
-  res.json({ data: c });
+app.post("/api/contacts", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "contacts"))) return;
+
+  try {
+    res.json({ data: await createContact(session, req.body) });
+  } catch {
+    res.status(502).json({ error: "Unable to create contact in Nextcloud CardDAV." });
+  }
 });
-app.patch("/api/contacts/:id", (req, res) => {
-  const c = storage.updateContact(Number(req.params.id), req.body);
-  if (!c) return res.status(404).json({ error: "Not found" });
-  res.json({ data: c });
+app.patch("/api/contacts/:id", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "contacts"))) return;
+
+  try {
+    const contact = await updateContact(session, Number(req.params.id), req.body);
+    if (!contact) return res.status(404).json({ error: "Not found" });
+    res.json({ data: contact });
+  } catch {
+    res.status(502).json({ error: "Unable to update contact in Nextcloud CardDAV." });
+  }
 });
-app.delete("/api/contacts/:id", (req, res) => {
-  storage.deleteContact(Number(req.params.id));
-  res.json({ data: { success: true } });
+app.delete("/api/contacts/:id", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "contacts"))) return;
+
+  try {
+    const success = await deleteContact(session, Number(req.params.id));
+    res.json({ data: { success } });
+  } catch {
+    res.status(502).json({ error: "Unable to delete contact from Nextcloud CardDAV." });
+  }
 });
 
 // Boards
-app.get("/api/boards", (_req, res) => res.json({ data: storage.getBoards() }));
-app.get("/api/boards/:id", (req, res) => {
-  const board = storage.getBoard(Number(req.params.id));
-  if (!board) return res.status(404).json({ error: "Not found" });
-  const boardStacks = storage.getStacks(board.id);
-  const boardCards = storage.getCards(board.id);
-  const stacksWithCards = boardStacks
-    .sort((a, b) => a.order - b.order)
-    .map(s => ({
-      ...s,
-      cards: boardCards.filter(c => c.stackId === s.id).sort((a, b) => a.order - b.order),
-    }));
-  res.json({ data: { board, stacks: stacksWithCards } });
+app.get("/api/boards", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "deck"))) return;
+
+  try {
+    res.json({ data: await listBoards(session) });
+  } catch {
+    res.status(502).json({ error: "Unable to load boards from Nextcloud Deck." });
+  }
 });
-app.post("/api/boards", (req, res) => {
-  const b = storage.createBoard(req.body);
-  res.json({ data: b });
+app.get("/api/boards/:id", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "deck"))) return;
+
+  try {
+    res.json({ data: await getBoard(session, Number(req.params.id)) });
+  } catch {
+    res.status(502).json({ error: "Unable to load board from Nextcloud Deck." });
+  }
 });
-app.post("/api/boards/:id/stacks", (req, res) => {
-  const boardId = Number(req.params.id);
-  const s = storage.createStack({ boardId, title: req.body.title, order: req.body.order });
-  res.json({ data: s });
+app.post("/api/boards", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "deck"))) return;
+
+  try {
+    res.json({ data: await createBoard(session, req.body) });
+  } catch {
+    res.status(502).json({ error: "Unable to create board in Nextcloud Deck." });
+  }
 });
-app.post("/api/boards/:boardId/stacks/:stackId/cards", (req, res) => {
-  const boardId = Number(req.params.boardId);
-  const stackId = Number(req.params.stackId);
-  const c = storage.createCard({ ...req.body, boardId, stackId });
-  res.json({ data: c });
+app.post("/api/boards/:id/stacks", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "deck"))) return;
+
+  try {
+    res.json({ data: await createStack(session, Number(req.params.id), String(req.body?.title || "Stack"), Number(req.body?.order || 0)) });
+  } catch {
+    res.status(502).json({ error: "Unable to create stack in Nextcloud Deck." });
+  }
+});
+app.post("/api/boards/:boardId/stacks/:stackId/cards", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "deck"))) return;
+
+  try {
+    res.json({ data: await createCard(session, Number(req.params.boardId), Number(req.params.stackId), req.body) });
+  } catch {
+    res.status(502).json({ error: "Unable to create card in Nextcloud Deck." });
+  }
 });
 
 // Cards
-app.patch("/api/cards/:id", (req, res) => {
-  const c = storage.updateCard(Number(req.params.id), req.body);
-  if (!c) return res.status(404).json({ error: "Not found" });
-  res.json({ data: c });
+app.patch("/api/cards/:id", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "deck"))) return;
+
+  try {
+    const card = await updateCard(session, Number(req.params.id), req.body);
+    if (!card) return res.status(404).json({ error: "Not found" });
+    res.json({ data: card });
+  } catch {
+    res.status(502).json({ error: "Unable to update card in Nextcloud Deck." });
+  }
 });
-app.delete("/api/cards/:id", (req, res) => {
-  storage.deleteCard(Number(req.params.id));
-  res.json({ data: { success: true } });
+app.delete("/api/cards/:id", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+  if (!(await requireCapability(session, res, "deck"))) return;
+
+  try {
+    const success = await deleteCard(session, Number(req.params.id));
+    res.json({ data: { success } });
+  } catch {
+    res.status(502).json({ error: "Unable to delete card from Nextcloud Deck." });
+  }
 });
 
 // Emails — counts MUST be before :id route
-app.get("/api/emails/counts", (_req, res) => {
-  res.json({ data: storage.getEmailCounts() });
-});
-app.get("/api/emails", (req, res) => {
-  const folder = (req.query.folder as string) || "inbox";
-  const all = storage.getEmails(folder);
-  all.sort((a, b) => b.receivedAt.localeCompare(a.receivedAt));
-  res.json({ data: all });
-});
-app.get("/api/emails/:id", (req, res) => {
-  const email = storage.getEmail(Number(req.params.id));
-  if (!email) return res.status(404).json({ error: "Not found" });
-  // Mark as read on fetch
-  if (!email.isRead) {
-    storage.updateEmail(email.id, { isRead: true });
+app.get("/api/emails/counts", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+
+  try {
+    res.json({ data: await getEmailCounts(session) });
+  } catch {
+    res.status(502).json({ error: "Unable to load Nextcloud Mail counts." });
   }
-  res.json({ data: storage.getEmail(email.id) });
 });
-app.post("/api/emails", (req, res) => {
-  const email = storage.createEmail(req.body);
-  res.json({ data: email });
+app.get("/api/emails", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+
+  const folder = (req.query.folder as string) || "inbox";
+  try {
+    res.json({ data: await listEmails(session, folder) });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to load mail from Nextcloud Mail.";
+    res.status(502).json({ error: message });
+  }
 });
-app.patch("/api/emails/:id", (req, res) => {
-  const email = storage.updateEmail(Number(req.params.id), req.body);
-  if (!email) return res.status(404).json({ error: "Not found" });
-  res.json({ data: email });
+app.get("/api/emails/:id", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+
+  try {
+    const email = await getEmail(session, Number(req.params.id));
+    if (!email) return res.status(404).json({ error: "Not found" });
+    if (!email.isRead) {
+      await updateEmail(session, email.id, { isRead: true }).catch(() => undefined);
+      const refreshed = await getEmail(session, Number(req.params.id));
+      return res.json({ data: refreshed || email });
+    }
+    res.json({ data: email });
+  } catch {
+    res.status(502).json({ error: "Unable to load message from Nextcloud Mail." });
+  }
 });
-app.delete("/api/emails/:id", (req, res) => {
-  storage.deleteEmail(Number(req.params.id));
-  res.json({ data: { success: true } });
+app.post("/api/emails", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+
+  try {
+    res.json({ data: await createEmail(session, req.body) });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to create message in Nextcloud Mail.";
+    res.status(502).json({ error: message });
+  }
+});
+app.patch("/api/emails/:id", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+
+  try {
+    const email = await updateEmail(session, Number(req.params.id), req.body);
+    if (!email) return res.status(404).json({ error: "Not found" });
+    res.json({ data: email });
+  } catch {
+    res.status(502).json({ error: "Unable to update message flags in Nextcloud Mail." });
+  }
+});
+app.delete("/api/emails/:id", async (req, res) => {
+  const session = requireNextcloudSession(req, res);
+  if (!session) return;
+
+  try {
+    const success = await deleteEmail(session, Number(req.params.id));
+    res.json({ data: { success } });
+  } catch {
+    res.status(502).json({ error: "Unable to delete message from Nextcloud Mail." });
+  }
 });
 
 // Activities
@@ -515,4 +937,6 @@ app.get("/api/activities", (_req, res) => res.json({ data: storage.getActivities
 const PORT = Number(process.env.PORT || 5000);
 app.listen(PORT, () => {
   console.log(`CloudSpace API server running on http://localhost:${PORT}`);
+  console.log(`Nextcloud upstream: ${process.env.NC_BASE_URL || "http://localhost:8090"}`);
+  console.log(`Mock-backed endpoints: ${ALLOW_MOCK_SERVICES ? "enabled" : "disabled"}`);
 });

@@ -2,6 +2,9 @@
 
 This package runs Nextcloud as an API/DAV backend while redirecting browser UI traffic to the React frontend.
 
+Current integration mode in this workspace uses the adapter login flow at `/api/auth/login`.
+OAuth/PKCE setup is not the active auth path for this branch.
+
 ## Quick Start
 
 ### 1. Start the stack
@@ -26,28 +29,33 @@ Run once after first start (and after any full volume reset):
 bash scripts/inject-config.sh
 ```
 
-This disables UI apps, enables the headless theme, installs OAuth2, and applies
+This disables UI apps, enables the headless theme, and applies
 security config. It is safe to run multiple times.
 
-### 3. Register OAuth2 client
+### 3. Confirm frontend origin
 
-1. Open http://localhost:8080 in a browser
-2. Log in as `admin` / `adminpassword` (or your `NC_ADMIN_PASSWORD`)
-3. Go to **Settings -> Administration -> Security**
-4. Scroll to **OAuth 2.0 clients -> Add client**
-   - Name: `Arise Drive Dev`
-   - Redirect URI: `http://localhost:3000/auth/callback`
-   - Enable PKCE
-5. Copy the **Client ID** -> set as `VITE_OAUTH_CLIENT_ID` in `.env.development`
+Set `FRONTEND_URL` to the same origin your Vite app actually uses in development.
+The default in this repo is `http://localhost:5173`.
 
 ### 4. Start the React frontend
 
 ```bash
-cd ../  # project root
-cp .env.headless.development.example .env.development
-# Edit .env.development and paste the Client ID from step 3
+cd ../NextCloud-Frontend
+cp .env.example .env
 npm run dev
 ```
+
+The Express adapter should run separately:
+
+```bash
+cd ../NextCloud-Frontend
+npx tsx server/index.ts
+```
+
+### Legacy OAuth notes
+
+If you later switch this branch to a full OAuth/PKCE strategy, use `http://localhost:5173/auth/callback`
+as the local redirect URI. The old `3000` references are stale.
 
 ### Volume reset (full clean restart)
 

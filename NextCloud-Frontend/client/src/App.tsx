@@ -1,10 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { Switch, Route, useLocation, Router } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
-import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { TopBar } from "@/components/layout/TopBar";
+import { fetchJson } from "@/lib/api";
+import { defaultCapabilities, type AppCapabilities } from "@/lib/capabilities";
 import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
 import Files from "@/pages/Files";
@@ -45,9 +47,21 @@ const queryClient = new QueryClient({
   },
 });
 
-function AppShell() {
+function FeatureUnavailable({ title, detail }: { title: string; detail: string }) {
+  return (
+    <div className="flex h-full items-center justify-center px-6">
+      <div className="max-w-md rounded-2xl border bg-card p-6 text-center shadow-sm">
+        <h2 className="text-xl font-semibold">{title}</h2>
+        <p className="mt-2 text-sm text-muted-foreground">{detail}</p>
+      </div>
+    </div>
+  );
+}
+
+function AppShell({ capabilities }: { capabilities: AppCapabilities }) {
   const [location] = useLocation();
   const [collapsed, setCollapsed] = useState(window.innerWidth < 1024);
+  const [activeCapabilities, setActiveCapabilities] = useState(capabilities);
 
   const handleResize = useCallback(() => {
     if (window.innerWidth < 768) {
@@ -60,13 +74,33 @@ function AppShell() {
     return () => window.removeEventListener("resize", handleResize);
   }, [handleResize]);
 
+  useEffect(() => {
+    setActiveCapabilities(capabilities);
+  }, [capabilities]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    fetchJson<AppCapabilities>("/api/capabilities")
+      .then((next) => {
+        if (!cancelled) {
+          setActiveCapabilities(next);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const toggleSidebar = useCallback(() => {
     setCollapsed((prev) => !prev);
   }, []);
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <Sidebar collapsed={collapsed} onToggle={toggleSidebar} />
+      <Sidebar collapsed={collapsed} onToggle={toggleSidebar} capabilities={activeCapabilities} />
       <div
         className="flex flex-1 flex-col transition-all duration-200"
         style={{ marginLeft: collapsed ? 60 : 240 }}
@@ -77,13 +111,13 @@ function AppShell() {
             <Switch>
               <Route path="/">{() => <Dashboard />}</Route>
               <Route path="/files">{() => <Files />}</Route>
-              <Route path="/talk">{() => <Talk />}</Route>
-              <Route path="/calendar">{() => <Calendar />}</Route>
-              <Route path="/notes">{() => <Notes />}</Route>
-              <Route path="/contacts">{() => <Contacts />}</Route>
-              <Route path="/deck">{() => <Deck />}</Route>
-              <Route path="/mail">{() => <Mail />}</Route>
-              <Route path="/activity">{() => <Activity />}</Route>
+              <Route path="/talk">{() => activeCapabilities.talk ? <Talk /> : <FeatureUnavailable title="Talk is unavailable" detail="The Nextcloud Talk app is not enabled for this connection." />}</Route>
+              <Route path="/calendar">{() => activeCapabilities.calendar ? <Calendar /> : <FeatureUnavailable title="Calendar is unavailable" detail="The Nextcloud Calendar app is not enabled for this connection." />}</Route>
+              <Route path="/notes">{() => activeCapabilities.notes ? <Notes /> : <FeatureUnavailable title="Notes are unavailable" detail="The custom notes layer is not available for this connection." />}</Route>
+              <Route path="/contacts">{() => activeCapabilities.contacts ? <Contacts /> : <FeatureUnavailable title="Contacts are unavailable" detail="The Nextcloud Contacts app is not enabled for this connection." />}</Route>
+              <Route path="/deck">{() => activeCapabilities.deck ? <Deck /> : <FeatureUnavailable title="Deck is unavailable" detail="The Nextcloud Deck app is not enabled for this connection." />}</Route>
+              <Route path="/mail">{() => activeCapabilities.mail ? <Mail /> : <FeatureUnavailable title="Mail is unavailable" detail="Nextcloud Mail is not configured for this user or the Mail app is missing." />}</Route>
+              <Route path="/activity">{() => activeCapabilities.activity ? <Activity /> : <FeatureUnavailable title="Activity is unavailable" detail="This area is still disabled until it is wired to a real Nextcloud backend." />}</Route>
               <Route path="/media">{() => <Media />}</Route>
               <Route path="/settings">{() => <Settings />}</Route>
             </Switch>
@@ -103,29 +137,62 @@ function FullScreenLoader() {
 }
 
 function AppRoutes() {
+  const queryClient = useQueryClient();
   const [location, setLocation] = useLocation();
+  const [capabilities, setCapabilities] = useState<AppCapabilities>(defaultCapabilities);
   const { data: session, isLoading } = useQuery({
     queryKey: ["/api/auth/session"],
     queryFn: async () => {
-      const response = await fetch("/api/auth/session");
-      if (response.status === 401) return null;
-      if (!response.ok) throw new Error("Unable to restore session");
-      const payload = await response.json();
-      return payload.user;
+      try {
+        const payload = await fetchJson<{ ok: boolean; user: unknown }>("/api/auth/session");
+        return payload.user;
+      } catch {
+        return null;
+      }
     },
     retry: false,
   });
+
+  useEffect(() => {
+    const handleUnauthorized = () => {
+      queryClient.setQueryData(["/api/auth/session"], null);
+      setLocation("/login");
+    };
+
+    window.addEventListener("cloudspace:unauthorized", handleUnauthorized);
+    return () => window.removeEventListener("cloudspace:unauthorized", handleUnauthorized);
+  }, [queryClient, setLocation]);
+
+  useEffect(() => {
+    if (!session) {
+      setCapabilities(defaultCapabilities);
+      return;
+    }
+
+    let cancelled = false;
+
+    fetchJson<AppCapabilities>("/api/capabilities")
+      .then((next) => {
+        if (!cancelled) {
+          setCapabilities(next);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCapabilities(defaultCapabilities);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session]);
 
   useEffect(() => {
     if (isLoading) return;
 
     if (!session && location !== "/login") {
       setLocation("/login");
-      return;
-    }
-
-    if (session && location === "/login") {
-      setLocation("/");
     }
   }, [isLoading, location, session, setLocation]);
 
@@ -136,7 +203,7 @@ function AppRoutes() {
   return (
     <Switch>
       <Route path="/login">{() => <Login />}</Route>
-      <Route>{() => (session ? <AppShell /> : <FullScreenLoader />)}</Route>
+      <Route>{() => (session ? <AppShell capabilities={capabilities} /> : <FullScreenLoader />)}</Route>
     </Switch>
   );
 }
