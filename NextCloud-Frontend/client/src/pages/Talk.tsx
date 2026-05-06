@@ -7,7 +7,7 @@ import {
   Users, PhoneOff, X, FileText, Image, File,
   Bell, BellOff, Crown, Trash2, UserPlus, Mic, MicOff,
   Volume2, VolumeX, Grid3x3, MoreHorizontal, VideoOff,
-  ChevronRight, PhoneIncoming,
+  ChevronRight,
 } from "lucide-react";
 import { cn, getAvatarColor, getInitials } from "@/lib/utils";
 import { apiRequest, fetchJson } from "@/lib/api";
@@ -51,13 +51,79 @@ function formatCallDuration(seconds: number) {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-const EMOJI_LIST = ["ðŸ˜€","ðŸ˜‚","ðŸ‘","â¤ï¸","ðŸŽ‰","ðŸ”¥","ðŸ‘€","ðŸ™","ðŸ’¯","âœ…","ðŸš€","ðŸ˜Ž","ðŸ¤”","ðŸ’¡","ðŸ“Œ","âœ¨","ðŸŽ¯","ðŸ“Š","ðŸ†","ðŸ‘"];
+function getMediaAccessErrorMessage(error: unknown, action: "call" | "screen-share" = "call") {
+  const isSecureOrigin =
+    window.location.protocol === "https:" ||
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1";
 
-const SEEDED_CONTACTS = [
-  "Rohan Mehra", "Priya Kapoor", "Arjun Singh", "Neha Joshi", "Vikram Patel",
-  "Anjali Gupta", "Rahul Verma", "Kavita Reddy", "Deepak Malhotra", "Sneha Iyer",
-  "QA Alex", "QA Bella", "QA Chris", "QA Diana", "QA Ethan",
-];
+  if (!isSecureOrigin) {
+    return action === "screen-share"
+      ? "Screen sharing requires HTTPS or localhost. Open this app over HTTPS to share your screen from another device."
+      : "Camera and microphone access require HTTPS or localhost. This LAN HTTP URL can only run signaling-only mode.";
+  }
+
+  if (error instanceof DOMException) {
+    if (error.name === "NotAllowedError") {
+      return action === "screen-share"
+        ? "Screen share permission was blocked by the browser."
+        : "Camera or microphone permission was blocked by the browser.";
+    }
+    if (error.name === "NotFoundError") {
+      return action === "screen-share"
+        ? "No screen-sharing source is available on this device."
+        : "No camera or microphone was found on this device.";
+    }
+    if (error.name === "NotReadableError") {
+      return action === "screen-share"
+        ? "Screen sharing is already being used by another application."
+        : "The camera or microphone is already being used by another application.";
+    }
+  }
+
+  return action === "screen-share"
+    ? "Unable to start screen sharing on this device."
+    : "Unable to access the camera or microphone on this device.";
+}
+
+const EMOJI_LIST = ["ðŸ˜€","ðŸ˜‚","ðŸ‘","â¤ï¸","ðŸŽ‰","ðŸ”¥","ðŸ‘€","ðŸ™","ðŸ’¯","âœ…","ðŸš€","ðŸ˜Ž","ðŸ¤”","ðŸ’¡","ðŸ“Œ","âœ¨","ðŸŽ¯","ðŸ“Š","ðŸ†","ðŸ‘"];
+const ACTIVE_CONVERSATION_STORAGE_KEY = "cloudspace:talk:activeConversationId";
+
+type TalkDirectoryUser = {
+  id: string;
+  username: string;
+  displayName: string;
+  email: string | null;
+};
+
+type TalkParticipant = {
+  attendeeId: number;
+  actorId: string;
+  actorType: string;
+  displayName: string;
+  email: string | null;
+  isModerator: boolean;
+};
+
+type SharedFile = {
+  id: number;
+  name: string;
+  path?: string;
+  size: number;
+  mimeType: string | null;
+  modifiedAt: string;
+};
+
+type UploadedTalkFile = {
+  id: number;
+  name: string;
+  path: string;
+  type: "file" | "folder";
+  mimeType: string | null;
+  size: number;
+  modifiedAt: string;
+  parentPath: string;
+};
 
 function getPreferredConversationId(conversations: Conversation[]) {
   const noteToSelf = conversations.find((conversation) => conversation.name === "Note to self");
@@ -99,26 +165,6 @@ function ToastOverlay({ toast, onDismiss }: { toast: { message: string; action?:
 
 // â”€â”€â”€ Mock members data â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-const MOCK_MEMBERS: Record<string, { name: string; email: string }[]> = {
-  "Product Team": [
-    { name: "Piyush Sharma", email: "piyush@cloudspace.home" },
-    { name: "Rohan Mehra", email: "rohan@cloudspace.home" },
-    { name: "Priya Kapoor", email: "priya@cloudspace.home" },
-    { name: "Arjun Singh", email: "arjun@cloudspace.home" },
-  ],
-  "HomeServer Admins": [
-    { name: "Piyush Sharma", email: "piyush@cloudspace.home" },
-    { name: "Vikram Patel", email: "vikram@cloudspace.home" },
-    { name: "Deepak Malhotra", email: "deepak@cloudspace.home" },
-  ],
-};
-
-const MOCK_SHARED_FILES = [
-  { name: "Q1 Report.pdf", size: "2.5 MB", icon: FileText },
-  { name: "Design Mockups.fig", size: "8.5 MB", icon: File },
-  { name: "Team Photo.jpg", size: "3.4 MB", icon: Image },
-];
-
 // â”€â”€â”€ Types â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 type CallState = {
@@ -131,29 +177,61 @@ type CallState = {
   isVideoOff: boolean;
   isSpeakerOn: boolean;
   isScreenSharing: boolean;
-  participants: { id: number; name: string; isSpeaking: boolean }[];
+  participants: {
+    id: number;
+    username: string;
+    name: string;
+    status: "ringing" | "joined" | "declined" | "left";
+    isSpeaking: boolean;
+  }[];
   duration: number;
+};
+
+type ConversationCallParticipant = {
+  username: string;
+  displayName: string;
+  status: "ringing" | "joined" | "declined" | "left";
+  joinedAt: string | null;
 };
 
 type ConversationCallSignal = {
   conversationId: number;
   type: "voice" | "video" | "screen";
   initiatorName: string;
+  initiatorUsername: string;
   active: boolean;
-  acceptedBy: string[];
-  declinedBy: string[];
   isScreenSharing: boolean;
   startedAt: string;
   updatedAt: string;
-  offer?: RTCSessionDescriptionInit;
-  offerFrom?: string;
-  answer?: RTCSessionDescriptionInit;
-  answerFrom?: string;
-  iceCandidates?: Array<{
+  participants: ConversationCallParticipant[];
+  signals: Array<{
     id: string;
     from: string;
-    candidate: RTCIceCandidateInit;
+    to: string;
+    kind: "offer" | "answer" | "ice";
+    createdAt: string;
+    payload: RTCSessionDescriptionInit | RTCIceCandidateInit;
   }>;
+  nativeSessionId?: string | null;
+  nativeAvailable?: boolean;
+  nativeSignalingMode?: string;
+  iceServers?: Array<{
+    urls: string | string[];
+    username?: string;
+    credential?: string;
+  }>;
+};
+
+type RemoteCallMedia = {
+  username: string;
+  displayName: string;
+  stream: MediaStream | null;
+  hasVideo: boolean;
+};
+
+type IncomingCallState = {
+  callerName: string;
+  type: "voice" | "video" | "screen";
 };
 
 // â”€â”€â”€ Components â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -250,19 +328,30 @@ function MessageBubble({
   isSent,
   showAvatar,
   showSenderName,
+  searchQuery = "",
 }: {
   message: Message;
   isSent: boolean;
   showAvatar: boolean;
   showSenderName: boolean;
+  searchQuery?: string;
 }) {
   const reactions = m.reactions ? JSON.parse(m.reactions) as Record<string, number> : null;
+  const normalizedSearch = searchQuery.trim().toLowerCase();
+  const matchesSearch =
+    normalizedSearch.length > 0 &&
+    (m.content.toLowerCase().includes(normalizedSearch) || m.senderName.toLowerCase().includes(normalizedSearch));
+  const bubbleClass = cn(
+    "rounded-2xl px-3.5 py-2 text-sm",
+    isSent ? "bg-primary text-primary-foreground rounded-br-sm" : "bg-muted rounded-bl-sm",
+    matchesSearch && "ring-2 ring-amber-300/80 dark:ring-amber-500/60",
+  );
 
   if (isSent) {
     return (
       <div className={cn("flex items-end gap-2 max-w-[70%] ml-auto flex-row-reverse", !showAvatar && "mt-0.5")}>
         <div>
-          <div className="bg-primary text-primary-foreground rounded-2xl rounded-br-sm px-3.5 py-2 text-sm">
+          <div className={bubbleClass}>
             {m.content}
           </div>
           <span className="text-[11px] text-muted-foreground mt-1 mr-1 text-right block">
@@ -291,7 +380,7 @@ function MessageBubble({
         {showSenderName && (
           <span className="text-[11px] text-muted-foreground mb-1 ml-1 block">{m.senderName}</span>
         )}
-        <div className="bg-muted rounded-2xl rounded-bl-sm px-3.5 py-2 text-sm">
+        <div className={bubbleClass}>
           {m.content}
         </div>
         <span className="text-[11px] text-muted-foreground mt-1 ml-1 block">
@@ -332,13 +421,32 @@ function TypingIndicator({ name }: { name: string }) {
 
 // â”€â”€â”€ Voice Call Overlay â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-function VoiceCallOverlay({ callState, onUpdate, onEnd }: {
+function VoiceCallOverlay({ callState, onUpdate, onEnd, onManageParticipants, onUnavailableAction, remoteMedia, currentUsername }: {
   callState: CallState;
   onUpdate: (partial: Partial<CallState>) => void;
   onEnd: () => void;
+  onManageParticipants?: () => void;
+  onUnavailableAction?: (message: string) => void;
+  remoteMedia: RemoteCallMedia[];
+  currentUsername: string;
 }) {
+  const joinedRemoteMedia = callState.participants
+    .filter((participant) => participant.username !== currentUsername && participant.status === "joined")
+    .map((participant) => {
+      const media = remoteMedia.find((item) => item.username === participant.username);
+      return media ? { participant, media } : null;
+    })
+    .filter((entry): entry is { participant: CallState["participants"][number]; media: RemoteCallMedia } => !!entry);
+
   return (
     <div className="fixed inset-0 z-50 bg-gradient-to-b from-gray-800 to-gray-900 flex flex-col items-center justify-center text-white">
+      {joinedRemoteMedia.map(({ media }) => (
+        <RemoteAudioRenderer
+          key={media.username}
+          stream={media.stream}
+          muted={!callState.isSpeakerOn}
+        />
+      ))}
       {/* Main caller */}
       <Avatar name={callState.conversationName} size={96} />
       <p className="text-xl font-semibold mt-4">{callState.conversationName}</p>
@@ -402,8 +510,8 @@ function VoiceCallOverlay({ callState, onUpdate, onEnd }: {
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent>
-            <DropdownMenuItem>Add participant</DropdownMenuItem>
-            <DropdownMenuItem>Hold</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onManageParticipants?.()}>Add participant</DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onUnavailableAction?.("Hold is not supported in this Talk integration yet.")}>Hold</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -421,21 +529,115 @@ function VoiceCallOverlay({ callState, onUpdate, onEnd }: {
 
 // â”€â”€â”€ Video Call Overlay â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-function VideoCallOverlay({ callState, onUpdate, onEnd, currentUserName }: {
+function StreamRenderer({
+  stream,
+  muted = false,
+  className,
+}: {
+  stream: MediaStream | null;
+  muted?: boolean;
+  className?: string;
+}) {
+  const ref = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    if (!ref.current) return;
+    ref.current.srcObject = stream;
+    if (stream) {
+      void ref.current.play().catch(() => undefined);
+    }
+  }, [stream]);
+
+  return <video ref={ref} autoPlay playsInline muted={muted} className={className} />;
+}
+
+function RemoteAudioRenderer({
+  stream,
+  muted = false,
+}: {
+  stream: MediaStream | null;
+  muted?: boolean;
+}) {
+  const ref = useRef<HTMLAudioElement>(null);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+
+    element.srcObject = stream;
+    element.muted = muted;
+
+    const playAudio = () => {
+      if (stream) {
+        void element.play().catch(() => undefined);
+      }
+    };
+
+    playAudio();
+
+    if (!stream) return;
+
+    const handleTrackAdded = () => {
+      playAudio();
+    };
+
+    const handleTrackUnmuted = () => {
+      playAudio();
+    };
+
+    stream.addEventListener("addtrack", handleTrackAdded);
+    for (const track of stream.getAudioTracks()) {
+      track.addEventListener("unmute", handleTrackUnmuted);
+    }
+
+    return () => {
+      stream.removeEventListener("addtrack", handleTrackAdded);
+      for (const track of stream.getAudioTracks()) {
+        track.removeEventListener("unmute", handleTrackUnmuted);
+      }
+    };
+  }, [stream, muted]);
+
+  return <audio ref={ref} autoPlay playsInline hidden />;
+}
+
+function VideoCallOverlay({ callState, onUpdate, onEnd, currentUserName, currentUsername, onManageParticipants, localStream, localVideoEnabled, remoteMedia }: {
   callState: CallState;
-  onUpdate: (partial: Partial<CallState>) => void;
+  onUpdate: (partial: Partial<CallState>) => Promise<void> | void;
   onEnd: () => void;
   currentUserName: string;
-  remoteVideoRef: React.RefObject<HTMLVideoElement | null>;
-  localVideoRef: React.RefObject<HTMLVideoElement | null>;
-  remoteVideoEnabled: boolean;
+  currentUsername: string;
+  onManageParticipants: () => void;
+  localStream: MediaStream | null;
   localVideoEnabled: boolean;
-  remoteParticipantName: string;
+  remoteMedia: RemoteCallMedia[];
 }) {
-  const isDm = callState.participants.length <= 2;
+  const joinedRemoteMedia = callState.participants
+    .filter((participant) => participant.username !== currentUsername && participant.status === "joined")
+    .map((participant) => {
+      const media = remoteMedia.find((item) => item.username === participant.username);
+      return {
+        participant,
+        media: media || {
+          username: participant.username,
+          displayName: participant.name,
+          stream: null,
+          hasVideo: false,
+        },
+      };
+    });
+  const isDm = joinedRemoteMedia.length <= 1;
+  const featuredRemote = joinedRemoteMedia[0];
 
   return (
     <div className="fixed inset-0 z-50 bg-gray-950 flex flex-col">
+      {joinedRemoteMedia.map(({ media }) => (
+        <RemoteAudioRenderer
+          key={media.username}
+          stream={media.stream}
+          muted={!callState.isSpeakerOn}
+        />
+      ))}
       {/* Duration header */}
       <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 bg-black/40 backdrop-blur rounded-full px-4 py-1.5 text-white text-sm font-mono">
         {formatCallDuration(callState.duration)}
@@ -447,19 +649,19 @@ function VideoCallOverlay({ callState, onUpdate, onEnd, currentUserName }: {
           /* Screen share layout */
           <div className="h-full flex flex-col gap-3">
             <div className="flex-1 rounded-xl bg-gray-800 flex flex-col items-center justify-center">
-              {remoteVideoEnabled ? (
-                <video ref={remoteVideoRef} autoPlay playsInline className="h-full w-full rounded-xl object-cover" />
+              {featuredRemote?.media.stream && featuredRemote.media.hasVideo ? (
+                <StreamRenderer stream={featuredRemote.media.stream} className="h-full w-full rounded-xl object-cover" />
               ) : (
                 <>
                   <MonitorUp size={64} className="text-white/30 mb-3" />
-                  <p className="text-white font-medium">{remoteParticipantName} is sharing their screen</p>
+                  <p className="text-white font-medium">{featuredRemote?.participant.name || "Participant"} is sharing their screen</p>
                 </>
               )}
             </div>
             <div className="flex gap-2 justify-center">
               {callState.participants.map((p) => (
                 <div
-                  key={p.id}
+                  key={p.username}
                   className={cn(
                     "w-24 h-[72px] rounded-lg bg-gray-800 flex flex-col items-center justify-center relative",
                     p.isSpeaking && "ring-2 ring-green-400"
@@ -475,22 +677,27 @@ function VideoCallOverlay({ callState, onUpdate, onEnd, currentUserName }: {
           /* DM video: main tile + self PIP */
           <div className="h-full relative">
             <div className={cn(
-              "h-full rounded-xl bg-gray-800 flex items-center justify-center relative overflow-hidden",
-              callState.participants[0]?.isSpeaking && "ring-2 ring-green-400"
-            )}>
-              {remoteVideoEnabled ? (
-                <video ref={remoteVideoRef} autoPlay playsInline className="h-full w-full object-cover" />
-              ) : (
-                <Avatar name={callState.participants[0]?.name || callState.conversationName} size={64} />
+                "h-full rounded-xl bg-gray-800 flex items-center justify-center relative overflow-hidden",
+                featuredRemote?.participant.isSpeaking && "ring-2 ring-green-400"
+              )}>
+                {featuredRemote?.media.stream && featuredRemote.media.hasVideo ? (
+                  <StreamRenderer stream={featuredRemote.media.stream} muted className="h-full w-full object-cover" />
+                ) : (
+                  <>
+                    {featuredRemote?.media.stream ? (
+                      <StreamRenderer stream={featuredRemote.media.stream} muted className="hidden" />
+                    ) : null}
+                    <Avatar name={featuredRemote?.participant.name || callState.conversationName} size={64} />
+                  </>
               )}
               <span className="absolute bottom-3 left-3 text-white text-xs font-medium bg-black/40 px-2 py-0.5 rounded">
-                {callState.participants[0]?.name || callState.conversationName}
+                {featuredRemote?.participant.name || callState.conversationName}
               </span>
             </div>
             {/* Self PIP */}
             <div className="absolute bottom-4 right-4 w-[240px] h-[135px] rounded-xl bg-gray-800 flex items-center justify-center overflow-hidden border border-gray-700">
-              {!callState.isVideoOff && localVideoEnabled ? (
-                <video ref={localVideoRef} autoPlay playsInline muted className="h-full w-full object-cover" />
+              {!callState.isVideoOff && localVideoEnabled && localStream ? (
+                <StreamRenderer stream={localStream} muted className="h-full w-full object-cover" />
               ) : callState.isVideoOff ? (
                 <div className="flex flex-col items-center gap-1">
                   <Avatar name={currentUserName} size={48} />
@@ -505,20 +712,36 @@ function VideoCallOverlay({ callState, onUpdate, onEnd, currentUserName }: {
         ) : (
           /* Group video: grid */
           <div className="h-full grid grid-cols-2 gap-3">
-            {callState.participants.map((p) => (
+            {callState.participants
+              .filter((p) => p.status === "joined")
+              .map((p) => {
+                const media = p.username === currentUsername
+                  ? { stream: localStream, hasVideo: localVideoEnabled && !callState.isVideoOff }
+                  : joinedRemoteMedia.find((item) => item.participant.username === p.username)?.media;
+                return (
               <div
-                key={p.id}
+                key={p.username}
                 className={cn(
                   "rounded-xl bg-gray-800 flex items-center justify-center relative overflow-hidden",
                   p.isSpeaking && "ring-2 ring-green-400"
                 )}
-              >
-                <Avatar name={p.name} size={64} />
+                >
+                  {media?.stream && media.hasVideo ? (
+                    <StreamRenderer stream={media.stream} muted className="h-full w-full object-cover" />
+                  ) : (
+                    <>
+                      {media?.stream ? (
+                        <StreamRenderer stream={media.stream} muted className="hidden" />
+                      ) : null}
+                      <Avatar name={p.name} size={64} />
+                    </>
+                )}
                 <span className="absolute bottom-2 left-2 text-white text-xs font-medium bg-black/40 px-2 py-0.5 rounded">
-                  {p.name}{p.name === currentUserName ? " (You)" : ""}
+                  {p.name}{p.username === currentUsername ? " (You)" : ""}
                 </span>
               </div>
-            ))}
+                );
+              })}
           </div>
         )}
       </div>
@@ -554,12 +777,12 @@ function VideoCallOverlay({ callState, onUpdate, onEnd, currentUserName }: {
         </button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="h-12 w-12 rounded-full flex items-center justify-center bg-white/10 hover:bg-white/20 text-white transition-colors">
+            <button aria-label="Call options" className="h-12 w-12 rounded-full flex items-center justify-center bg-white/10 hover:bg-white/20 text-white transition-colors">
               <MoreHorizontal size={20} />
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent>
-            <DropdownMenuItem>Add participant</DropdownMenuItem>
+            <DropdownMenuItem onClick={onManageParticipants}>Add participant</DropdownMenuItem>
             <DropdownMenuItem>Hold</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -576,23 +799,29 @@ function VideoCallOverlay({ callState, onUpdate, onEnd, currentUserName }: {
 
 // â”€â”€â”€ Incoming Call Notification â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-function IncomingCallBanner({ callerName, onAccept, onDecline }: {
+function IncomingCallBanner({ callerName, type, onAccept, onDecline }: {
   callerName: string;
+  type: "voice" | "video" | "screen";
   onAccept: () => void;
   onDecline: () => void;
 }) {
+  const isVoiceCall = type === "voice";
+  const isScreenShare = type === "screen";
+  const CallIcon = isVoiceCall ? Phone : isScreenShare ? MonitorUp : Video;
+  const callLabel = isVoiceCall ? "voice" : isScreenShare ? "screen-share" : "video";
+
   return (
     <div className="fixed top-4 right-4 z-50 bg-card border shadow-2xl rounded-2xl p-4 animate-fade-in w-80">
       <div className="flex items-center gap-3 mb-3">
         <div className="relative">
           <Avatar name={callerName} size={48} />
           <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-green-500 rounded-full flex items-center justify-center">
-            <Phone size={10} className="text-white" />
+              <CallIcon size={10} className="text-white" />
           </div>
         </div>
         <div>
           <p className="font-semibold text-sm">{callerName}</p>
-          <p className="text-xs text-muted-foreground">Incoming video call...</p>
+          <p className="text-xs text-muted-foreground">Incoming {callLabel} call...</p>
         </div>
       </div>
       <div className="flex gap-2">
@@ -600,7 +829,7 @@ function IncomingCallBanner({ callerName, onAccept, onDecline }: {
           <PhoneOff size={14} className="mr-1" /> Decline
         </Button>
         <Button className="flex-1 bg-green-500 hover:bg-green-600 text-white" size="sm" onClick={onAccept}>
-          <Phone size={14} className="mr-1" /> Accept
+          <CallIcon size={14} className="mr-1" /> Accept
         </Button>
       </div>
     </div>
@@ -618,6 +847,7 @@ function InfoPanel({
   showToast,
   currentUserName,
   currentUserId,
+  availableUsers,
 }: {
   conversation: Conversation;
   onMuteToggle: () => void;
@@ -627,20 +857,42 @@ function InfoPanel({
   showToast: (msg: string) => void;
   currentUserName: string;
   currentUserId: number;
+  availableUsers: TalkDirectoryUser[];
 }) {
   const isDm = conversation.type === "dm";
-  const members = (MOCK_MEMBERS[conversation.name] || []).map((member) =>
-    member.name === "Piyush Sharma"
-      ? { ...member, name: currentUserName, email: `${currentUserName.toLowerCase().replace(/\s+/g, ".")}@cloudspace.home` }
-      : member,
-  );
-  const isAdmin = conversation.adminId === currentUserId;
+  const { data: participantsData } = useQuery({
+    queryKey: ["/api/conversations/participants", conversation.id],
+    queryFn: () => fetchJson<{ data: TalkParticipant[] }>(`/api/conversations/${conversation.id}/participants`),
+  });
+  const { data: sharedFilesData } = useQuery({
+    queryKey: ["/api/files", "/"],
+    queryFn: () => fetchJson<{ data: SharedFile[] }>("/api/files?path=%2F"),
+  });
+  const members = (participantsData?.data || []).map((participant) => ({
+    id: participant.attendeeId || Math.max(2, Array.from(participant.actorId).reduce((sum, char) => sum + char.charCodeAt(0), 0)),
+    name: participant.displayName,
+    email: participant.email,
+    isModerator: participant.isModerator,
+    username: participant.actorId,
+  }));
+  const dmParticipant = members.find((member) => member.name !== currentUserName) || members[0] || null;
+  const isAdmin = members.some((member) => member.id === currentUserId && member.isModerator);
+  const sharedFiles = (sharedFilesData?.data || []).slice(0, 3);
 
   const [leaveOpen, setLeaveOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [transferOpen, setTransferOpen] = useState(false);
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [selectedTransferMember, setSelectedTransferMember] = useState<{ id: number; name: string } | null>(null);
+  const addMemberMutation = useMutation({
+    mutationFn: async (username: string) => {
+      return fetchJson<{ data: TalkParticipant[] }>(`/api/conversations/${conversation.id}/participants`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username }),
+      });
+    },
+  });
 
   const otherMembers = members.filter((m) => m.name !== currentUserName);
 
@@ -652,7 +904,7 @@ function InfoPanel({
         {isDm ? (
           <>
             <p className="text-sm text-muted-foreground">
-              {conversation.name.toLowerCase().replace(/\s/g, ".")}@cloudspace.home
+              {dmParticipant?.email || dmParticipant?.username || conversation.name}
             </p>
             <div className="flex items-center gap-1 mt-1">
               <OnlineDot size={6} />
@@ -669,23 +921,28 @@ function InfoPanel({
       {isDm ? (
         <>
           <div className="p-3 space-y-1">
-            <Button variant="ghost" className="w-full justify-start text-sm h-9">View profile</Button>
+            <Button variant="ghost" className="w-full justify-start text-sm h-9" onClick={() => showToast("Profile view is not connected yet for Talk contacts.")}>View profile</Button>
             <Button variant="ghost" className="w-full justify-start text-sm h-9" onClick={onMuteToggle}>
               {conversation.isMuted ? <><BellOff size={16} className="mr-2" /> Unmute notifications</> : <><Bell size={16} className="mr-2" /> Mute notifications</>}
             </Button>
-            <Button variant="ghost" className="w-full justify-start text-sm h-9">Block user</Button>
+            <Button variant="ghost" className="w-full justify-start text-sm h-9" onClick={() => showToast("Blocking users is not supported by this Talk integration yet.")}>Block user</Button>
           </div>
           <Separator />
           <div className="p-3">
             <p className="text-xs font-medium text-muted-foreground mb-2">SHARED FILES</p>
             <div className="space-y-2">
-              {MOCK_SHARED_FILES.map((f) => (
-                <div key={f.name} className="flex items-center gap-2 text-sm">
-                  <f.icon size={16} className="text-muted-foreground shrink-0" />
-                  <span className="truncate flex-1">{f.name}</span>
-                  <span className="text-xs text-muted-foreground">{f.size}</span>
-                </div>
-              ))}
+              {sharedFiles.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No recent files available</p>
+              ) : sharedFiles.map((sharedFile) => {
+                const SharedIcon = sharedFile.mimeType?.startsWith("image/") ? Image : sharedFile.mimeType?.includes("pdf") ? FileText : File;
+                return (
+                  <div key={sharedFile.id} className="flex items-center gap-2 text-sm">
+                    <SharedIcon size={16} className="text-muted-foreground shrink-0" />
+                    <span className="truncate flex-1">{sharedFile.name}</span>
+                    <span className="text-xs text-muted-foreground">{Math.max(1, Math.round(sharedFile.size / 1024))} KB</span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </>
@@ -708,9 +965,7 @@ function InfoPanel({
                       )}
                       {/* Admin badge */}
                       {(() => {
-                        const aid = conversation.adminId;
-                        if (!aid) return null;
-                        if (aid === currentUserId && member.name === currentUserName) {
+                        if (member.isModerator) {
                           return <Badge variant="secondary" className="text-[10px] px-1.5">Admin</Badge>;
                         }
                         return null;
@@ -845,17 +1100,27 @@ function InfoPanel({
             <DialogTitle>Add member</DialogTitle>
           </DialogHeader>
           <div className="space-y-1 max-h-[300px] overflow-y-auto">
-            {SEEDED_CONTACTS.filter((n) => !members.some((m) => m.name === n)).map((name) => (
+            {availableUsers
+              .filter((user) => !members.some((member) => member.username === user.username))
+              .map((user) => (
               <button
-                key={name}
+                key={user.username}
                 className="w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-muted transition-colors"
                 onClick={() => {
-                  showToast(`Member added: ${name}`);
-                  setAddMemberOpen(false);
+                  addMemberMutation.mutate(user.username, {
+                    onSuccess: () => {
+                      showToast(`Member added: ${user.displayName}`);
+                      setAddMemberOpen(false);
+                    },
+                    onError: () => showToast(`Unable to add ${user.displayName}`),
+                  });
                 }}
               >
-                <Avatar name={name} size={32} />
-                <span className="text-sm font-medium">{name}</span>
+                <Avatar name={user.displayName} size={32} />
+                <div className="min-w-0 text-left">
+                  <span className="text-sm font-medium block truncate">{user.displayName}</span>
+                  <span className="text-xs text-muted-foreground block truncate">@{user.username}</span>
+                </div>
               </button>
             ))}
           </div>
@@ -877,31 +1142,32 @@ export default function Talk() {
   const [showSearch, setShowSearch] = useState(false);
   const [isTyping, setIsTyping] = useState(false);
   const [composerContent, setComposerContent] = useState("");
+  const [chatSearchQuery, setChatSearchQuery] = useState("");
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [callState, setCallState] = useState<CallState | null>(null);
-  const [incomingCall, setIncomingCall] = useState<string | null>(null);
+  const [incomingCall, setIncomingCall] = useState<IncomingCallState | null>(null);
   const [newGroupTab, setNewGroupTab] = useState<"dm" | "group">("dm");
   const [newGroupName, setNewGroupName] = useState("");
   const [newGroupMembers, setNewGroupMembers] = useState<string[]>([]);
   const [newDmSearch, setNewDmSearch] = useState("");
-  const [remoteVideoEnabled, setRemoteVideoEnabled] = useState(false);
   const [localVideoEnabled, setLocalVideoEnabled] = useState(false);
+  const [remoteMedia, setRemoteMedia] = useState<RemoteCallMedia[]>([]);
+  const [isUploadingAttachment, setIsUploadingAttachment] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
   const incomingCallTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
-  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const incomingCallAudioContextRef = useRef<AudioContext | null>(null);
+  const incomingCallRingtoneIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const peerConnectionsRef = useRef(new Map<string, RTCPeerConnection>());
   const localStreamRef = useRef<MediaStream | null>(null);
-  const remoteStreamRef = useRef<MediaStream | null>(null);
-  const remoteAudioRef = useRef<HTMLAudioElement>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement>(null);
-  const localVideoRef = useRef<HTMLVideoElement>(null);
-  const isCallInitiatorRef = useRef(false);
+  const previousLocalStreamRef = useRef<MediaStream | null>(null);
   const isMediaReadyRef = useRef(false);
-  const sentOfferRef = useRef(false);
-  const sentAnswerRef = useRef(false);
+  const sentOffersRef = useRef(new Set<string>());
+  const sentAnswersRef = useRef(new Set<string>());
   const processedCandidateIdsRef = useRef<Set<string>>(new Set());
   const sawActiveSignalRef = useRef<Set<number>>(new Set());
 
@@ -915,10 +1181,16 @@ export default function Talk() {
   const activeConversation = conversations.find((c) => c.id === activeConversationId);
   const { data: currentUserData } = useQuery({
     queryKey: ["/api/user"],
-    queryFn: () => fetchJson<{ data: { id?: number; name?: string } }>("/api/user"),
+    queryFn: () => fetchJson<{ data: { id?: number; name?: string; username?: string } }>("/api/user"),
   });
   const currentUserId = currentUserData?.data?.id || 0;
   const currentUserName = currentUserData?.data?.name || "You";
+  const currentUsername = currentUserData?.data?.username || currentUserName;
+  const { data: usersData } = useQuery({
+    queryKey: ["/api/users/search"],
+    queryFn: () => fetchJson<{ data: TalkDirectoryUser[] }>("/api/users/search"),
+  });
+  const availableUsers = usersData?.data || [];
 
   const messagesQuery = useQuery({
     queryKey: ["/api/conversations/messages", activeConversationId],
@@ -937,10 +1209,18 @@ export default function Talk() {
   });
   const callSignal = callSignalData?.data;
 
-  // Set first conversation as active on load
+  useEffect(() => {
+    if (!activeConversationId) return;
+    window.sessionStorage.setItem(ACTIVE_CONVERSATION_STORAGE_KEY, String(activeConversationId));
+  }, [activeConversationId]);
+
+  // Restore last open conversation, fall back to preferred thread.
   useEffect(() => {
     if (conversations.length && !activeConversationId) {
-      setActiveConversationId(getPreferredConversationId(conversations));
+      const storedConversationId = window.sessionStorage.getItem(ACTIVE_CONVERSATION_STORAGE_KEY);
+      const parsedStoredId = storedConversationId ? Number(storedConversationId) : NaN;
+      const hasStoredConversation = Number.isFinite(parsedStoredId) && conversations.some((conversation) => conversation.id === parsedStoredId);
+      setActiveConversationId(hasStoredConversation ? parsedStoredId : getPreferredConversationId(conversations));
     }
   }, [conversations, activeConversationId]);
 
@@ -974,137 +1254,162 @@ export default function Talk() {
     return () => clearInterval(interval);
   }, [callState?.active]);
 
+  function stopIncomingCallRingtone() {
+    if (incomingCallRingtoneIntervalRef.current) {
+      clearInterval(incomingCallRingtoneIntervalRef.current);
+      incomingCallRingtoneIntervalRef.current = null;
+    }
+
+    const audioContext = incomingCallAudioContextRef.current;
+    if (audioContext && audioContext.state !== "closed") {
+      void audioContext.suspend().catch(() => undefined);
+    }
+  }
+
+  function playIncomingCallTone(audioContext: AudioContext) {
+    const startAt = audioContext.currentTime;
+    const bursts = [0, 0.38];
+
+    for (const offset of bursts) {
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(880, startAt + offset);
+      oscillator.frequency.exponentialRampToValueAtTime(660, startAt + offset + 0.22);
+
+      gainNode.gain.setValueAtTime(0.0001, startAt + offset);
+      gainNode.gain.exponentialRampToValueAtTime(0.08, startAt + offset + 0.03);
+      gainNode.gain.exponentialRampToValueAtTime(0.0001, startAt + offset + 0.28);
+
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+
+      oscillator.start(startAt + offset);
+      oscillator.stop(startAt + offset + 0.3);
+    }
+  }
+
+  async function startIncomingCallRingtone() {
+    if (incomingCallRingtoneIntervalRef.current) return;
+
+    const AudioContextCtor =
+      window.AudioContext ||
+      (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+
+    if (!AudioContextCtor) return;
+
+    if (!incomingCallAudioContextRef.current || incomingCallAudioContextRef.current.state === "closed") {
+      incomingCallAudioContextRef.current = new AudioContextCtor();
+    }
+
+    const audioContext = incomingCallAudioContextRef.current;
+    if (!audioContext) return;
+
+    if (audioContext.state === "suspended") {
+      await audioContext.resume().catch(() => undefined);
+    }
+
+    if (audioContext.state !== "running") return;
+
+    playIncomingCallTone(audioContext);
+    incomingCallRingtoneIntervalRef.current = setInterval(() => {
+      if (audioContext.state === "running") {
+        playIncomingCallTone(audioContext);
+      }
+    }, 2200);
+  }
+
   // Incoming call auto-dismiss
   useEffect(() => {
-    if (!incomingCall) return;
+    if (!incomingCall) {
+      stopIncomingCallRingtone();
+      return;
+    }
+
+    void startIncomingCallRingtone();
     incomingCallTimeoutRef.current = setTimeout(() => setIncomingCall(null), 15000);
-    return () => { if (incomingCallTimeoutRef.current) clearTimeout(incomingCallTimeoutRef.current); };
+    return () => {
+      if (incomingCallTimeoutRef.current) clearTimeout(incomingCallTimeoutRef.current);
+      stopIncomingCallRingtone();
+    };
   }, [incomingCall]);
 
   useEffect(() => {
-    if (!remoteAudioRef.current) return;
-    if (!callState?.active) return;
-    remoteAudioRef.current.muted = !callState.isSpeakerOn;
-    remoteAudioRef.current.volume = callState.isSpeakerOn ? 1 : 0;
-  }, [callState?.active, callState?.isSpeakerOn]);
+    return () => {
+      stopIncomingCallRingtone();
+      const audioContext = incomingCallAudioContextRef.current;
+      if (audioContext && audioContext.state !== "closed") {
+        void audioContext.close().catch(() => undefined);
+      }
+    };
+  }, []);
+
+  function getParticipantStableId(username: string) {
+    return Array.from(username).reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  }
+
+  function mapCallParticipants(participants: ConversationCallParticipant[]) {
+    return participants.map((participant) => ({
+      id: getParticipantStableId(participant.username),
+      username: participant.username,
+      name: participant.displayName,
+      status: participant.status,
+      isSpeaking: false,
+    }));
+  }
+
+  function shouldCreateOfferForPeer(localUsername: string, remoteUsername: string, initiatorUsername: string) {
+    if (localUsername === initiatorUsername) return true;
+    if (remoteUsername === initiatorUsername) return false;
+    return localUsername.localeCompare(remoteUsername) < 0;
+  }
+
+  function setRemoteMediaEntry(entry: RemoteCallMedia) {
+    setRemoteMedia((prev) => {
+      const existingIndex = prev.findIndex((item) => item.username === entry.username);
+      if (existingIndex === -1) return [...prev, entry];
+      const next = prev.slice();
+      next[existingIndex] = entry;
+      return next;
+    });
+  }
+
+  function removeRemoteMediaEntry(username: string) {
+    setRemoteMedia((prev) => prev.filter((item) => item.username !== username));
+  }
+
+  function stopPeerConnection(username: string) {
+    const existing = peerConnectionsRef.current.get(username);
+    if (!existing) return;
+    existing.onicecandidate = null;
+    existing.ontrack = null;
+    existing.close();
+    peerConnectionsRef.current.delete(username);
+    sentOffersRef.current.delete(username);
+    sentAnswersRef.current.delete(username);
+    removeRemoteMediaEntry(username);
+  }
+
+  function stopMediaAndPeer() {
+    localStreamRef.current?.getTracks().forEach((track) => track.stop());
+    previousLocalStreamRef.current?.getTracks().forEach((track) => track.stop());
+    previousLocalStreamRef.current = null;
+    localStreamRef.current = null;
+    for (const username of Array.from(peerConnectionsRef.current.keys())) {
+      stopPeerConnection(username);
+    }
+    setRemoteMedia([]);
+    setLocalVideoEnabled(false);
+    isMediaReadyRef.current = false;
+    processedCandidateIdsRef.current.clear();
+  }
 
   useEffect(() => {
     return () => {
       stopMediaAndPeer();
     };
   }, []);
-
-  useEffect(() => {
-    if (!activeConversationId) return;
-
-    if (callSignal?.active && callSignal.initiatorName !== currentUserName && !callState?.active) {
-      sawActiveSignalRef.current.add(activeConversationId);
-      setIncomingCall(callSignal.initiatorName);
-      return;
-    }
-
-    if (
-      callSignal?.active &&
-      callState?.active &&
-      callState.conversationId === activeConversationId &&
-      callState.isScreenSharing !== callSignal.isScreenSharing
-    ) {
-      setCallState((prev) => (prev ? { ...prev, isScreenSharing: callSignal.isScreenSharing } : null));
-    }
-
-    if (callSignal?.active) {
-      sawActiveSignalRef.current.add(activeConversationId);
-    }
-
-    const hasResolvedCallSignal = typeof callSignalData !== "undefined";
-    if (
-      hasResolvedCallSignal &&
-      sawActiveSignalRef.current.has(activeConversationId) &&
-      !callSignal?.active &&
-      callState?.active &&
-      callState.conversationId === activeConversationId
-    ) {
-      showToast("Call ended");
-      stopMediaAndPeer();
-      setCallState(null);
-      setIncomingCall(null);
-      sawActiveSignalRef.current.delete(activeConversationId);
-    }
-  }, [activeConversationId, callSignal, callSignalData, callState, currentUserName, showToast]);
-
-  useEffect(() => {
-    if (!activeConversationId || !callSignal?.active || !callState?.active) return;
-    if (callState.conversationId !== activeConversationId) return;
-    const pc = peerConnectionRef.current;
-    if (!pc) return;
-
-    const syncSignal = async () => {
-      if (!isCallInitiatorRef.current && callSignal.offer && !sentAnswerRef.current) {
-        if (!pc.currentRemoteDescription) {
-          await pc.setRemoteDescription(new RTCSessionDescription(callSignal.offer));
-        }
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        await apiRequest("PATCH", `/api/conversations/${activeConversationId}/call`, {
-          answer,
-          answerFrom: currentUserName,
-        });
-        sentAnswerRef.current = true;
-      }
-
-      if (isCallInitiatorRef.current && callSignal.answer && !pc.currentRemoteDescription) {
-        await pc.setRemoteDescription(new RTCSessionDescription(callSignal.answer));
-      }
-
-      const candidates = callSignal.iceCandidates || [];
-      for (const candidateItem of candidates) {
-        if (candidateItem.from === currentUserName) continue;
-        if (processedCandidateIdsRef.current.has(candidateItem.id)) continue;
-        try {
-          await pc.addIceCandidate(new RTCIceCandidate(candidateItem.candidate));
-          processedCandidateIdsRef.current.add(candidateItem.id);
-        } catch (_err) {
-          // Candidate may arrive before remote description; ignore and retry on next poll.
-        }
-      }
-    };
-
-    void syncSignal().catch(() => undefined);
-  }, [activeConversationId, callSignal, callState?.active, callState?.conversationId, currentUserName]);
-
-  // Build participants from conversation
-  function buildParticipants(conv: Conversation) {
-    const memberNames: string[] = conv.members ? JSON.parse(conv.members) : [];
-    if (conv.type === "dm") {
-      return [
-        { id: 2, name: conv.name, isSpeaking: false },
-        { id: 1, name: currentUserName, isSpeaking: false },
-      ];
-    }
-    const withSelf = memberNames.includes(currentUserName) ? memberNames : [currentUserName, ...memberNames];
-    return withSelf.map((name, i) => ({ id: i + 1, name, isSpeaking: false }));
-  }
-
-  function stopMediaAndPeer() {
-    localStreamRef.current?.getTracks().forEach((track) => track.stop());
-    localStreamRef.current = null;
-    if (peerConnectionRef.current) {
-      peerConnectionRef.current.onicecandidate = null;
-      peerConnectionRef.current.ontrack = null;
-      peerConnectionRef.current.close();
-      peerConnectionRef.current = null;
-    }
-    remoteStreamRef.current = null;
-    if (remoteAudioRef.current) remoteAudioRef.current.srcObject = null;
-    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
-    if (localVideoRef.current) localVideoRef.current.srcObject = null;
-    setRemoteVideoEnabled(false);
-    setLocalVideoEnabled(false);
-    sentOfferRef.current = false;
-    sentAnswerRef.current = false;
-    isMediaReadyRef.current = false;
-    processedCandidateIdsRef.current.clear();
-  }
 
   async function getLocalMedia(type: "voice" | "video" | "screen") {
     if (!(navigator?.mediaDevices?.getUserMedia)) {
@@ -1122,89 +1427,265 @@ export default function Talk() {
     return navigator.mediaDevices.getUserMedia({ audio: true, video: false });
   }
 
-  function ensurePeerConnection(conversationId: number) {
-    if (peerConnectionRef.current) return peerConnectionRef.current;
+  function syncPeerConnectionTracks(connection: RTCPeerConnection, stream: MediaStream) {
+    const senders = connection.getSenders();
+    const videoTrack = stream.getVideoTracks()[0] || null;
+    const audioTrack = stream.getAudioTracks()[0] || null;
 
-    const pc = new RTCPeerConnection({
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+    const videoSender = senders.find((sender) => sender.track?.kind === "video");
+    const audioSender = senders.find((sender) => sender.track?.kind === "audio");
+
+    if (videoSender) {
+      void videoSender.replaceTrack(videoTrack);
+    } else if (videoTrack) {
+      connection.addTrack(videoTrack, stream);
+    }
+
+    if (audioSender) {
+      void audioSender.replaceTrack(audioTrack);
+    } else if (audioTrack) {
+      connection.addTrack(audioTrack, stream);
+    }
+  }
+
+  function ensurePeerConnection(
+    conversationId: number,
+    remoteUsername: string,
+    remoteDisplayName: string,
+  ) {
+    const existing = peerConnectionsRef.current.get(remoteUsername);
+    if (existing) return existing;
+
+    const connection = new RTCPeerConnection({
+      iceServers:
+        Array.isArray(callSignal?.iceServers) && callSignal.iceServers.length > 0
+          ? callSignal.iceServers
+          : [{ urls: "stun:stun.l.google.com:19302" }],
     });
 
-    pc.onicecandidate = async (event) => {
+    if (localStreamRef.current) {
+      syncPeerConnectionTracks(connection, localStreamRef.current);
+    }
+
+    connection.onicecandidate = async (event) => {
       if (!event.candidate) return;
       await apiRequest("PATCH", `/api/conversations/${conversationId}/call`, {
         iceCandidate: event.candidate.toJSON(),
-        iceFrom: currentUserName,
+        iceTo: remoteUsername,
       }).catch(() => undefined);
     };
 
-    pc.ontrack = (event) => {
-      const [remoteStream] = event.streams;
-      if (!remoteStream) return;
-      remoteStreamRef.current = remoteStream;
-      if (remoteAudioRef.current) {
-        remoteAudioRef.current.srcObject = remoteStream;
-        void remoteAudioRef.current.play().catch(() => undefined);
-      }
-      const hasVideo = remoteStream.getVideoTracks().length > 0;
-      setRemoteVideoEnabled(hasVideo);
-      if (hasVideo && remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = remoteStream;
-        void remoteVideoRef.current.play().catch(() => undefined);
-      }
+    connection.ontrack = (event) => {
+      const [stream] = event.streams;
+      if (!stream) return;
+      setRemoteMediaEntry({
+        username: remoteUsername,
+        displayName: remoteDisplayName,
+        stream,
+        hasVideo: stream.getVideoTracks().length > 0,
+      });
     };
 
-    peerConnectionRef.current = pc;
-    return pc;
+    peerConnectionsRef.current.set(remoteUsername, connection);
+    return connection;
+  }
+
+  async function replaceLocalStream(nextStream: MediaStream, conversationId: number, isScreenSharing: boolean) {
+    const previous = localStreamRef.current;
+    localStreamRef.current = nextStream;
+    setLocalVideoEnabled(nextStream.getVideoTracks().length > 0);
+
+    for (const connection of peerConnectionsRef.current.values()) {
+      syncPeerConnectionTracks(connection, nextStream);
+    }
+
+    if (previous && previous !== previousLocalStreamRef.current) {
+      previous.getTracks().forEach((track) => track.stop());
+    }
+    isMediaReadyRef.current = true;
+    await apiRequest("PATCH", `/api/conversations/${conversationId}/call`, {
+      isScreenSharing,
+    }).catch(() => undefined);
   }
 
   async function ensureMediaAndTracks(type: "voice" | "video" | "screen", conversationId: number) {
-    const pc = ensurePeerConnection(conversationId);
-    if (isMediaReadyRef.current) return pc;
+    if (isMediaReadyRef.current && localStreamRef.current) {
+      return localStreamRef.current;
+    }
+
     const stream = await getLocalMedia(type);
     localStreamRef.current = stream;
-    const hasLocalVideo = stream.getVideoTracks().length > 0;
-    setLocalVideoEnabled(hasLocalVideo);
-    if (hasLocalVideo && localVideoRef.current) {
-      localVideoRef.current.srcObject = stream;
-      void localVideoRef.current.play().catch(() => undefined);
+    previousLocalStreamRef.current = type === "screen" ? null : stream;
+    setLocalVideoEnabled(stream.getVideoTracks().length > 0);
+    for (const connection of peerConnectionsRef.current.values()) {
+      syncPeerConnectionTracks(connection, stream);
     }
-    stream.getTracks().forEach((track) => {
-      pc.addTrack(track, stream);
-    });
     isMediaReadyRef.current = true;
-    return pc;
+    return stream;
   }
+
+  async function maybeCreateOfferForPeer(
+    conversationId: number,
+    remoteUsername: string,
+    remoteDisplayName: string,
+    callType: "voice" | "video" | "screen",
+    initiatorUsername: string,
+  ) {
+    if (!currentUsername || !localStreamRef.current) return;
+    if (!shouldCreateOfferForPeer(currentUsername, remoteUsername, initiatorUsername)) return;
+    if (sentOffersRef.current.has(remoteUsername)) return;
+
+    const connection = ensurePeerConnection(conversationId, remoteUsername, remoteDisplayName);
+    const offer = await connection.createOffer({
+      offerToReceiveAudio: true,
+      offerToReceiveVideo: callType !== "voice",
+    });
+    await connection.setLocalDescription(offer);
+    await apiRequest("PATCH", `/api/conversations/${conversationId}/call`, {
+      offer,
+      offerTo: remoteUsername,
+    }).catch(() => undefined);
+    sentOffersRef.current.add(remoteUsername);
+  }
+
+  async function syncCallSignals(signalState: ConversationCallSignal) {
+    if (!currentUsername || !callState?.active) return;
+    const joinedParticipants = signalState.participants.filter((participant) => participant.status === "joined");
+
+    for (const participant of joinedParticipants) {
+      if (participant.username === currentUsername) continue;
+      await maybeCreateOfferForPeer(
+        signalState.conversationId,
+        participant.username,
+        participant.displayName,
+        signalState.type,
+        signalState.initiatorUsername,
+      );
+    }
+
+    for (const participant of signalState.participants) {
+      if (participant.username === currentUsername) continue;
+      if (participant.status === "declined" || participant.status === "left") {
+        stopPeerConnection(participant.username);
+      }
+    }
+
+    for (const signal of signalState.signals) {
+      if (signal.to !== currentUsername) continue;
+      if (processedCandidateIdsRef.current.has(signal.id)) continue;
+
+      const remoteParticipant = signalState.participants.find((participant) => participant.username === signal.from);
+      const connection = ensurePeerConnection(
+        signalState.conversationId,
+        signal.from,
+        remoteParticipant?.displayName || signal.from,
+      );
+
+      try {
+        if (signal.kind === "offer") {
+          if (!connection.currentRemoteDescription) {
+            await connection.setRemoteDescription(new RTCSessionDescription(signal.payload as RTCSessionDescriptionInit));
+          }
+          if (!sentAnswersRef.current.has(signal.from)) {
+            const answer = await connection.createAnswer();
+            await connection.setLocalDescription(answer);
+            await apiRequest("PATCH", `/api/conversations/${signalState.conversationId}/call`, {
+              answer,
+              answerTo: signal.from,
+            }).catch(() => undefined);
+            sentAnswersRef.current.add(signal.from);
+          }
+        }
+
+        if (signal.kind === "answer") {
+          if (!connection.currentRemoteDescription) {
+            await connection.setRemoteDescription(new RTCSessionDescription(signal.payload as RTCSessionDescriptionInit));
+          }
+        }
+
+        if (signal.kind === "ice") {
+          await connection.addIceCandidate(new RTCIceCandidate(signal.payload as RTCIceCandidateInit));
+        }
+
+        processedCandidateIdsRef.current.add(signal.id);
+      } catch (_error) {
+        // Retry on next poll if the connection is not ready yet.
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (!activeConversationId) return;
+
+    if (callSignal?.active) {
+      sawActiveSignalRef.current.add(activeConversationId);
+      if (callState?.active && callState.conversationId === activeConversationId) {
+        setCallState((prev) =>
+          prev
+            ? {
+                ...prev,
+                isScreenSharing: callSignal.isScreenSharing,
+                participants: mapCallParticipants(callSignal.participants),
+              }
+            : prev,
+        );
+        void syncCallSignals(callSignal);
+      } else {
+        const currentParticipant = callSignal.participants.find((participant) => participant.username === currentUsername);
+          if (callSignal.initiatorUsername !== currentUsername && currentParticipant?.status !== "declined") {
+            setIncomingCall({
+              callerName: callSignal.initiatorName,
+              type: callSignal.type,
+            });
+          }
+        }
+        return;
+    }
+
+    const hasResolvedCallSignal = typeof callSignalData !== "undefined";
+    if (
+      hasResolvedCallSignal &&
+      sawActiveSignalRef.current.has(activeConversationId) &&
+      !callSignal?.active &&
+      callState?.active &&
+      callState.conversationId === activeConversationId
+    ) {
+      showToast("Call ended");
+      stopMediaAndPeer();
+      setCallState(null);
+      setIncomingCall(null);
+      sawActiveSignalRef.current.delete(activeConversationId);
+    }
+  }, [activeConversationId, callSignal, callSignalData, callState?.active, callState?.conversationId, currentUsername, showToast]);
 
   async function startCall(type: "voice" | "video" | "screen") {
     if (!activeConversation) return;
     stopMediaAndPeer();
-    let mediaReady = true;
     try {
-      await ensureMediaAndTracks(type, activeConversation.id);
-    } catch (_error) {
-      mediaReady = false;
-      showToast("Media permissions unavailable. Running in signaling-only mode.");
+      const stream = await ensureMediaAndTracks(type, activeConversation.id);
+      previousLocalStreamRef.current = stream;
+    } catch (error) {
+      showToast(getMediaAccessErrorMessage(error, "call"));
+      return;
     }
 
-    await apiRequest("POST", `/api/conversations/${activeConversation.id}/call/start`, {
-      type,
-      initiatorName: currentUserName,
-    }).catch(() => undefined);
-
-    isCallInitiatorRef.current = true;
-    if (mediaReady) {
-      const pc = ensurePeerConnection(activeConversation.id);
-      const offer = await pc.createOffer({
-        offerToReceiveAudio: true,
-        offerToReceiveVideo: type !== "voice",
-      });
-      await pc.setLocalDescription(offer);
-      await apiRequest("PATCH", `/api/conversations/${activeConversation.id}/call`, {
-        offer,
-        offerFrom: currentUserName,
-      }).catch(() => undefined);
-      sentOfferRef.current = true;
+    const payload = await fetchJson<{ data: ConversationCallSignal }>(
+      `/api/conversations/${activeConversation.id}/call/start`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type,
+          initiatorName: currentUserName,
+        }),
+      },
+    ).catch(() => null);
+    if (!payload?.data?.nativeAvailable) {
+      stopMediaAndPeer();
+      showToast("Unable to start the native Nextcloud Talk call for this conversation.");
+      return;
     }
+    const participants = payload?.data?.participants || [];
 
     setCallState({
       active: true,
@@ -1216,7 +1697,7 @@ export default function Talk() {
       isVideoOff: type === "voice",
       isSpeakerOn: true,
       isScreenSharing: type === "screen",
-      participants: buildParticipants(activeConversation),
+      participants: mapCallParticipants(participants),
       duration: 0,
     });
     setIncomingCall(null);
@@ -1234,61 +1715,93 @@ export default function Talk() {
     setCallState(null);
   }
 
-  function updateCall(partial: Partial<CallState>) {
-    setCallState((prev) => {
-      if (!prev) return null;
-      if (typeof partial.isMuted === "boolean") {
-        localStreamRef.current?.getAudioTracks().forEach((track) => {
-          track.enabled = !partial.isMuted;
-        });
+  async function toggleScreenShare(enabled: boolean, conversationId: number) {
+    if (enabled) {
+      if (!navigator.mediaDevices.getDisplayMedia) {
+        throw new Error("Screen share is unavailable in this browser.");
       }
-      if (typeof partial.isVideoOff === "boolean") {
-        localStreamRef.current?.getVideoTracks().forEach((track) => {
-          track.enabled = !partial.isVideoOff;
-        });
+      previousLocalStreamRef.current = localStreamRef.current;
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      const [screenTrack] = screenStream.getVideoTracks();
+      if (screenTrack) {
+        screenTrack.onended = () => {
+          void toggleScreenShare(false, conversationId).catch(() => undefined);
+        };
       }
-      if (typeof partial.isScreenSharing === "boolean") {
-        apiRequest("PATCH", `/api/conversations/${prev.conversationId}/call`, {
-          isScreenSharing: partial.isScreenSharing,
-        }).catch(() => undefined);
+      await replaceLocalStream(screenStream, conversationId, true);
+      return;
+    }
+
+    const fallbackStream = previousLocalStreamRef.current
+      || await getLocalMedia(callState?.type === "voice" ? "voice" : "video");
+    previousLocalStreamRef.current = fallbackStream;
+    await replaceLocalStream(fallbackStream, conversationId, false);
+  }
+
+  async function updateCall(partial: Partial<CallState>) {
+    const existing = callState;
+    if (!existing) return;
+
+    if (typeof partial.isMuted === "boolean") {
+      localStreamRef.current?.getAudioTracks().forEach((track) => {
+        track.enabled = !partial.isMuted;
+      });
+    }
+
+    if (typeof partial.isVideoOff === "boolean") {
+      localStreamRef.current?.getVideoTracks().forEach((track) => {
+        track.enabled = !partial.isVideoOff;
+      });
+    }
+
+    if (typeof partial.isScreenSharing === "boolean" && partial.isScreenSharing !== existing.isScreenSharing) {
+      try {
+        await toggleScreenShare(partial.isScreenSharing, existing.conversationId);
+      } catch (error) {
+        showToast(getMediaAccessErrorMessage(error, "screen-share"));
+        return;
       }
-      return { ...prev, ...partial };
-    });
+    }
+
+    setCallState((prev) => (prev ? { ...prev, ...partial } : prev));
   }
 
   async function acceptIncomingCall() {
     if (!activeConversationId || !callSignal) return;
-    let mediaReady = true;
     try {
-      await ensureMediaAndTracks(callSignal.type, activeConversationId);
-    } catch (_error) {
-      mediaReady = false;
-      showToast("Media permissions unavailable. Running in signaling-only mode.");
-    }
-    await apiRequest("POST", `/api/conversations/${activeConversationId}/call/accept`, {
-      userName: currentUserName,
-    }).catch(() => undefined);
-    isCallInitiatorRef.current = false;
-    sentOfferRef.current = false;
-    sentAnswerRef.current = false;
-    if (!mediaReady) {
-      stopMediaAndPeer();
+      const stream = await ensureMediaAndTracks(callSignal.type, activeConversationId);
+      previousLocalStreamRef.current = stream;
+    } catch (error) {
+      showToast(getMediaAccessErrorMessage(error, "call"));
+      return;
     }
 
-    const conversation = activeConversation || conversations.find((c) => c.id === activeConversationId);
+    const payload = await fetchJson<{ data: ConversationCallSignal }>(
+      `/api/conversations/${activeConversationId}/call/accept`,
+      {
+        method: "POST",
+      },
+    ).catch(() => null);
+    if (!payload?.data?.nativeAvailable) {
+      stopMediaAndPeer();
+      showToast("Unable to join the native Nextcloud Talk call.");
+      return;
+    }
+
+    const conversation = activeConversation || conversations.find((item) => item.id === activeConversationId);
     if (!conversation) return;
 
     setCallState({
       active: true,
-      type: callSignal.type,
+      type: payload.data.type,
       conversationId: conversation.id,
       conversationName: conversation.name,
-      startedAt: new Date(callSignal.startedAt),
+      startedAt: new Date(payload.data.startedAt),
       isMuted: false,
-      isVideoOff: callSignal.type === "voice",
+      isVideoOff: payload.data.type === "voice",
       isSpeakerOn: true,
-      isScreenSharing: callSignal.isScreenSharing,
-      participants: buildParticipants(conversation),
+      isScreenSharing: payload.data.isScreenSharing,
+      participants: mapCallParticipants(payload.data.participants),
       duration: 0,
     });
     setIncomingCall(null);
@@ -1296,9 +1809,7 @@ export default function Talk() {
 
   async function declineIncomingCall() {
     if (activeConversationId) {
-      await apiRequest("POST", `/api/conversations/${activeConversationId}/call/decline`, {
-        userName: currentUserName,
-      }).catch(() => undefined);
+      await apiRequest("POST", `/api/conversations/${activeConversationId}/call/decline`).catch(() => undefined);
     }
     stopMediaAndPeer();
     setIncomingCall(null);
@@ -1352,6 +1863,55 @@ export default function Talk() {
     },
   });
 
+  const handleAttachmentUpload = useCallback(async (file: File | null) => {
+    if (!file || !activeConversation) return;
+    setIsUploadingAttachment(true);
+
+    try {
+      const folderName = activeConversation.type === "group"
+        ? activeConversation.name.replace(/[<>:"/\\|?*]+/g, "-").trim() || "Group"
+        : "Direct Messages";
+      await apiRequest("POST", "/api/files", {
+        name: "Talk Uploads",
+        type: "folder",
+        parentPath: "/",
+      }).catch(() => undefined);
+      await apiRequest("POST", "/api/files", {
+        name: folderName,
+        type: "folder",
+        parentPath: "/Talk Uploads",
+      }).catch(() => undefined);
+      const uploadParentPath = `/Talk Uploads/${folderName}`;
+      const fileBuffer = await file.arrayBuffer();
+      const response = await fetch("/api/files", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "x-file-name": file.name,
+          "x-parent-path": uploadParentPath,
+          "x-file-content-type": file.type || "application/octet-stream",
+        },
+        body: fileBuffer,
+      });
+
+      if (!response.ok) {
+        throw new Error("Upload failed");
+      }
+
+      const payload = await response.json() as { data: UploadedTalkFile };
+      const attachmentMessage = `Shared file: ${payload.data.name}\n${payload.data.path}`;
+      await sendMutation.mutateAsync(attachmentMessage);
+      showToast(`Shared ${payload.data.name}`);
+    } catch {
+      showToast("Unable to share file in this conversation.");
+    } finally {
+      setIsUploadingAttachment(false);
+      if (attachmentInputRef.current) {
+        attachmentInputRef.current.value = "";
+      }
+    }
+  }, [activeConversation, sendMutation, showToast]);
+
   // Mark as read mutation
   const markReadMutation = useMutation({
     mutationFn: async (id: number) => {
@@ -1404,7 +1964,12 @@ export default function Talk() {
 
   // Create conversation mutation
   const createConversationMutation = useMutation({
-    mutationFn: async (data: { name: string; type: string; adminId?: number; createdBy?: number; members?: string }) => {
+    mutationFn: async (data: {
+      name: string;
+      type: string;
+      inviteUsername?: string;
+      memberUsernames?: string[];
+    }) => {
       const res = await apiRequest("POST", "/api/conversations", data);
       return res.json() as Promise<{ data: Conversation }>;
     },
@@ -1471,6 +2036,10 @@ export default function Talk() {
     typingTimeoutRef.current = setTimeout(() => setIsTyping(false), 3000);
   };
 
+  const handleUnavailableAction = useCallback((message: string) => {
+    showToast(message);
+  }, [showToast]);
+
   const handleMuteToggle = () => {
     if (!activeConversation) return;
     const newMuted = !activeConversation.isMuted;
@@ -1505,13 +2074,10 @@ export default function Talk() {
 
   const handleCreateGroup = () => {
     if (!newGroupName.trim() || newGroupMembers.length === 0) return;
-    const allMembers = [currentUserName, ...newGroupMembers];
     createConversationMutation.mutate({
       name: newGroupName,
       type: "group",
-      adminId: currentUserId,
-      createdBy: currentUserId,
-      members: JSON.stringify(allMembers),
+      memberUsernames: newGroupMembers,
     });
     setNewChatOpen(false);
     setNewGroupName("");
@@ -1519,16 +2085,16 @@ export default function Talk() {
     showToast("Group created");
   };
 
-  const handleStartDm = (contactName: string) => {
+  const handleStartDm = (contact: TalkDirectoryUser) => {
     // Check if DM already exists
-    const existing = conversations.find((c) => c.type === "dm" && c.name === contactName);
+    const existing = conversations.find((c) => c.type === "dm" && c.name === contact.displayName);
     if (existing) {
       handleSelectConversation(existing.id);
     } else {
       createConversationMutation.mutate({
-        name: contactName,
+        name: contact.displayName,
         type: "dm",
-        members: JSON.stringify([currentUserName, contactName]),
+        inviteUsername: contact.username,
       });
     }
     setSearchQuery("");
@@ -1536,6 +2102,7 @@ export default function Talk() {
     setNewDmSearch("");
     textareaRef.current?.focus();
   };
+
 
   // Group messages by date for rendering
   const groupedMessages = messagesList.reduce<{ date: string; messages: Message[] }[]>((groups, msg) => {
@@ -1548,6 +2115,20 @@ export default function Talk() {
     }
     return groups;
   }, []);
+  const normalizedChatSearch = chatSearchQuery.trim().toLowerCase();
+  const hasChatSearch = normalizedChatSearch.length > 0;
+  const visibleGroupedMessages = groupedMessages
+    .map((group) => ({
+      ...group,
+      messages: hasChatSearch
+        ? group.messages.filter((message) =>
+            message.content.toLowerCase().includes(normalizedChatSearch) ||
+            message.senderName.toLowerCase().includes(normalizedChatSearch),
+          )
+        : group.messages,
+    }))
+    .filter((group) => group.messages.length > 0);
+  const visibleMessageCount = visibleGroupedMessages.reduce((count, group) => count + group.messages.length, 0);
 
   // Filter conversations by search
   const query = searchQuery.toLowerCase().trim();
@@ -1563,52 +2144,62 @@ export default function Talk() {
 
   // People search â€” contacts not already in conversations
   const peopleResults = query
-    ? SEEDED_CONTACTS.filter((name) => {
-        if (!name.toLowerCase().includes(query)) return false;
+    ? availableUsers.filter((user) => {
+        if (!user.displayName.toLowerCase().includes(query) && !user.username.toLowerCase().includes(query)) return false;
         // Show if they don't match an existing visible conversation
-        return !conversations.some((c) => c.type === "dm" && c.name === name && c.name.toLowerCase().includes(query));
+        return !conversations.some((c) => c.type === "dm" && c.name === user.displayName);
       })
     : [];
+  const activeConversationMemberCount = activeConversation?.members
+    ? (() => {
+        try {
+          return (JSON.parse(activeConversation.members) as string[]).length;
+        } catch {
+          return 0;
+        }
+      })()
+    : 0;
 
   const noResults = query && filteredDm.length === 0 && filteredGroups.length === 0 && peopleResults.length === 0;
-  const remoteParticipantName = callState?.participants.find((p) => p.name !== currentUserName)?.name
-    || callSignal?.initiatorName
-    || activeConversation?.name
-    || "Other participant";
-
   return (
     <>
       <ToastOverlay toast={toast} onDismiss={dismissToast} />
 
       {/* Call overlays */}
-      {callState?.active && callState.type === "voice" && (
-        <VoiceCallOverlay callState={callState} onUpdate={updateCall} onEnd={endCall} />
-      )}
+        {callState?.active && callState.type === "voice" && (
+          <VoiceCallOverlay
+            callState={callState}
+            onUpdate={updateCall}
+            onEnd={endCall}
+            onManageParticipants={() => setShowInfoPanel(true)}
+            onUnavailableAction={handleUnavailableAction}
+            remoteMedia={remoteMedia}
+            currentUsername={currentUsername}
+          />
+        )}
       {callState?.active && (callState.type === "video" || callState.type === "screen") && (
         <VideoCallOverlay
           callState={callState}
           onUpdate={updateCall}
           onEnd={endCall}
           currentUserName={currentUserName}
-          remoteVideoRef={remoteVideoRef}
-          localVideoRef={localVideoRef}
-          remoteVideoEnabled={remoteVideoEnabled}
+          currentUsername={currentUsername}
+          onManageParticipants={() => setShowInfoPanel(true)}
+          localStream={localStreamRef.current}
           localVideoEnabled={localVideoEnabled}
-          remoteParticipantName={remoteParticipantName}
+          remoteMedia={remoteMedia}
         />
       )}
 
       {/* Incoming call notification */}
         {incomingCall && (
           <IncomingCallBanner
-            callerName={incomingCall}
+            callerName={incomingCall.callerName}
+            type={incomingCall.type}
             onAccept={acceptIncomingCall}
             onDecline={declineIncomingCall}
           />
         )}
-
-      <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
-
       <div className="flex h-[calc(100vh-var(--topbar-height,56px))] overflow-hidden">
         {/* â”€â”€â”€ Panel 1: Conversation List â”€â”€â”€ */}
         <div className="w-[280px] flex-shrink-0 border-r flex flex-col bg-background">
@@ -1663,14 +2254,17 @@ export default function Talk() {
                         <div className="flex-1 h-px bg-border" />
                       </div>
                       <div className="space-y-0.5">
-                        {peopleResults.map((name) => (
+                        {peopleResults.map((user) => (
                           <button
-                            key={name}
-                            onClick={() => handleStartDm(name)}
+                            key={user.username}
+                            onClick={() => handleStartDm(user)}
                             className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg mx-1 text-left hover:bg-muted/60 transition-colors"
                           >
-                            <Avatar name={name} size={38} />
-                            <span className="text-sm font-medium flex-1 truncate">{name}</span>
+                            <Avatar name={user.displayName} size={38} />
+                            <div className="flex-1 min-w-0">
+                              <span className="text-sm font-medium block truncate">{user.displayName}</span>
+                              <span className="text-xs text-muted-foreground block truncate">@{user.username}</span>
+                            </div>
                             <ChevronRight size={14} className="text-muted-foreground" />
                           </button>
                         ))}
@@ -1724,7 +2318,7 @@ export default function Talk() {
                     </div>
                   ) : (
                     <span className="text-xs text-muted-foreground">
-                      {(MOCK_MEMBERS[activeConversation.name] || []).length} members
+                      {activeConversationMemberCount} members
                     </span>
                   )}
                 </div>
@@ -1735,6 +2329,7 @@ export default function Talk() {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
+                      aria-label={callState?.active ? "End voice call" : "Start voice call"}
                       onClick={() => callState?.active ? endCall() : startCall("voice")}
                       className={cn(
                         "h-8 w-8 rounded-lg flex items-center justify-center transition-colors",
@@ -1753,6 +2348,7 @@ export default function Talk() {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
+                      aria-label={callState?.active && callState.type === "video" ? "End video call" : "Start video call"}
                       onClick={() => callState?.active && callState.type === "video" ? endCall() : startCall("video")}
                       className={cn(
                         "h-8 w-8 rounded-lg flex items-center justify-center transition-colors",
@@ -1771,6 +2367,7 @@ export default function Talk() {
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
+                      aria-label={callState?.isScreenSharing ? "Stop screen sharing" : "Start screen sharing"}
                       onClick={() => callState?.active ? updateCall({ isScreenSharing: !callState.isScreenSharing }) : startCall("screen")}
                       className={cn(
                         "h-8 w-8 rounded-lg flex items-center justify-center transition-colors",
@@ -1785,23 +2382,25 @@ export default function Talk() {
                   <TooltipContent>Screen share</TooltipContent>
                 </Tooltip>
 
-                {/* Simulate incoming call */}
+                {/* Add participants / manage call */}
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
-                      onClick={() => setIncomingCall(activeConversation.name)}
+                      aria-label="Open participants"
+                      onClick={() => setShowInfoPanel(true)}
                       className="h-8 w-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
                     >
-                      <PhoneIncoming size={18} />
+                      <UserPlus size={18} />
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent>Simulate incoming call</TooltipContent>
+                  <TooltipContent>Add people</TooltipContent>
                 </Tooltip>
 
                 {/* Search */}
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
+                      aria-label="Search messages"
                       onClick={() => setShowSearch((s) => !s)}
                       className={cn(
                         "h-8 w-8 rounded-lg flex items-center justify-center transition-colors",
@@ -1844,20 +2443,36 @@ export default function Talk() {
             {/* Search Bar (collapsible) */}
             <div className={cn("overflow-hidden transition-all duration-200", showSearch ? "max-h-14" : "max-h-0")}>
               <div className="px-4 py-2 border-b bg-muted/30">
-                <Input placeholder="Search in conversation..." className="h-8 text-sm" />
+                <div className="flex items-center gap-2">
+                  <Input
+                    placeholder="Search in conversation..."
+                    className="h-8 text-sm"
+                    value={chatSearchQuery}
+                    onChange={(event) => setChatSearchQuery(event.target.value)}
+                  />
+                  {hasChatSearch && (
+                    <span className="text-xs text-muted-foreground shrink-0">
+                      {visibleMessageCount} match{visibleMessageCount === 1 ? "" : "es"}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
 
             {/* Message Area */}
             <div className="flex-1 overflow-y-auto px-4 py-4 space-y-1">
-              {groupedMessages.map((group, gi) => (
+              {visibleGroupedMessages.length === 0 && hasChatSearch ? (
+                <div className="text-sm text-muted-foreground text-center py-8">
+                  No messages match “{chatSearchQuery}”.
+                </div>
+              ) : visibleGroupedMessages.map((group, gi) => (
                 <div key={group.date}>
                   <DateSeparator date={group.messages[0].sentAt} />
                   {group.messages.map((msg, mi) => {
                     const isSent = currentUserId > 0
                       ? msg.senderId === currentUserId
                       : msg.senderName === currentUserName;
-                    const prevMsg = mi > 0 ? group.messages[mi - 1] : gi > 0 ? groupedMessages[gi - 1].messages.at(-1) : undefined;
+                    const prevMsg = mi > 0 ? group.messages[mi - 1] : gi > 0 ? visibleGroupedMessages[gi - 1].messages.at(-1) : undefined;
                     const isConsecutive = prevMsg
                       && prevMsg.senderId === msg.senderId
                       && (new Date(msg.sentAt).getTime() - new Date(prevMsg.sentAt).getTime()) < 120000;
@@ -1869,6 +2484,7 @@ export default function Talk() {
                         isSent={isSent}
                         showAvatar={!isSent && !isConsecutive}
                         showSenderName={!isSent && !isConsecutive}
+                        searchQuery={chatSearchQuery}
                       />
                     );
                   })}
@@ -1884,16 +2500,26 @@ export default function Talk() {
             {/* Message Composer */}
             <div className="border-t bg-background px-3 py-3 flex-shrink-0">
               <div className="flex items-end gap-2">
+                <input
+                  ref={attachmentInputRef}
+                  type="file"
+                  className="hidden"
+                  onChange={(event) => {
+                    void handleAttachmentUpload(event.target.files?.[0] || null);
+                  }}
+                />
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
-                      onClick={() => showToast("File sharing coming soon")}
+                      aria-label="Attach file"
+                      onClick={() => attachmentInputRef.current?.click()}
                       className="h-9 w-9 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors mb-0.5"
+                      disabled={isUploadingAttachment}
                     >
                       <Paperclip size={18} />
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent>Attach file</TooltipContent>
+                  <TooltipContent>{isUploadingAttachment ? "Uploading..." : "Attach file"}</TooltipContent>
                 </Tooltip>
 
                 <Popover open={emojiOpen} onOpenChange={setEmojiOpen}>
@@ -1972,6 +2598,7 @@ export default function Talk() {
             showToast={showToast}
             currentUserName={currentUserName}
             currentUserId={currentUserId}
+            availableUsers={availableUsers}
           />
         )}
       </div>
@@ -1999,16 +2626,23 @@ export default function Talk() {
                 onChange={(e) => setNewDmSearch(e.target.value)}
               />
               <div className="space-y-1 max-h-[300px] overflow-y-auto">
-                {SEEDED_CONTACTS
-                  .filter((n) => !newDmSearch || n.toLowerCase().includes(newDmSearch.toLowerCase()))
-                  .map((name) => (
+                {availableUsers
+                  .filter((user) =>
+                    !newDmSearch ||
+                    user.displayName.toLowerCase().includes(newDmSearch.toLowerCase()) ||
+                    user.username.toLowerCase().includes(newDmSearch.toLowerCase()),
+                  )
+                  .map((user) => (
                     <button
-                      key={name}
+                      key={user.username}
                       className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-muted transition-colors"
-                      onClick={() => handleStartDm(name)}
+                      onClick={() => handleStartDm(user)}
                     >
-                      <Avatar name={name} size={36} />
-                      <span className="text-sm font-medium">{name}</span>
+                      <Avatar name={user.displayName} size={36} />
+                      <div className="min-w-0">
+                        <span className="text-sm font-medium block truncate">{user.displayName}</span>
+                        <span className="text-xs text-muted-foreground block truncate">@{user.username}</span>
+                      </div>
                     </button>
                   ))}
               </div>
@@ -2024,18 +2658,18 @@ export default function Talk() {
               />
               <p className="text-xs text-muted-foreground mb-2">Add members (at least 1)</p>
               <div className="space-y-1 max-h-[200px] overflow-y-auto">
-                {SEEDED_CONTACTS.map((name) => {
-                  const isSelected = newGroupMembers.includes(name);
+                {availableUsers.map((user) => {
+                  const isSelected = newGroupMembers.includes(user.username);
                   return (
                     <button
-                      key={name}
+                      key={user.username}
                       className={cn(
                         "w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors",
                         isSelected ? "bg-accent" : "hover:bg-muted"
                       )}
                       onClick={() => {
                         setNewGroupMembers((prev) =>
-                          isSelected ? prev.filter((n) => n !== name) : [...prev, name]
+                          isSelected ? prev.filter((username) => username !== user.username) : [...prev, user.username]
                         );
                       }}
                     >
@@ -2045,23 +2679,30 @@ export default function Talk() {
                       )}>
                         {isSelected && <span className="text-white text-[10px]">âœ“</span>}
                       </div>
-                      <Avatar name={name} size={32} />
-                      <span className="text-sm font-medium">{name}</span>
+                      <Avatar name={user.displayName} size={32} />
+                      <div className="min-w-0 text-left">
+                        <span className="text-sm font-medium block truncate">{user.displayName}</span>
+                        <span className="text-xs text-muted-foreground block truncate">@{user.username}</span>
+                      </div>
                     </button>
                   );
                 })}
               </div>
               {newGroupMembers.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mt-3">
-                  {newGroupMembers.map((name) => (
-                    <span key={name} className="inline-flex items-center gap-1 bg-muted rounded-full px-2.5 py-1 text-xs font-medium">
-                      <Avatar name={name} size={16} />
-                      {name.split(" ")[0]}
-                      <button onClick={() => setNewGroupMembers((prev) => prev.filter((n) => n !== name))} className="hover:opacity-70">
-                        <X size={10} />
-                      </button>
-                    </span>
-                  ))}
+                  {newGroupMembers.map((username) => {
+                    const user = availableUsers.find((entry) => entry.username === username);
+                    const label = user?.displayName || username;
+                    return (
+                      <span key={username} className="inline-flex items-center gap-1 bg-muted rounded-full px-2.5 py-1 text-xs font-medium">
+                        <Avatar name={label} size={16} />
+                        {label.split(" ")[0]}
+                        <button onClick={() => setNewGroupMembers((prev) => prev.filter((value) => value !== username))} className="hover:opacity-70">
+                          <X size={10} />
+                        </button>
+                      </span>
+                    );
+                  })}
                 </div>
               )}
               <Button
